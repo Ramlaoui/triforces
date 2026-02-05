@@ -1,0 +1,42 @@
+defaults:
+  - _self_
+  - dataset: bulk
+  - model: triforces_esen
+  - collate: simple
+  - contrastive: default
+
+data_path: ???
+atompack_mmap: false
+
+train:
+  epochs: 1
+  batch_size: 8
+  lr: 0.001
+  tqdm: true
+  log_every: 10
+
+wandb:
+  enabled: false
+  project: triforces
+  entity: null
+  name: null
+  group: null
+  tags: []
+  job_type: null
+  mode: null
+
+loss:
+  _target_: triforces.losses.ContrastiveLoss
+  temperature_graph: 0.1
+  lambda_node: 0.0
+  lambda_graph: 1.0
+
+embed_dim: 128
+projection_dim: 128
+
+device: null
+max_atomic_number: 118
+
+hydra:
+  job:
+    chdir: false

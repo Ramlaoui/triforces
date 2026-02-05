@@ -1,0 +1,9 @@
+_target_: triforces.data.pyg_collate
+_partial_: true
+graph:
+  _target_: triforces.models.interaction.esen.esen_graph
+  radius: 6.0
+  max_num_neighbors: 300
+  enforce_max_neighbors_strictly: false
+  radius_pbc_version: 1
+  dataset: omat

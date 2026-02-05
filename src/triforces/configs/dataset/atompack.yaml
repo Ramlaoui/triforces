@@ -1,0 +1,3 @@
+_target_: triforces.data.atompack_dataset.AtompackDataset
+path: ${data_path}
+use_mmap: ${atompack_mmap}

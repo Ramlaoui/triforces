@@ -1,0 +1,6 @@
+_target_: triforces.data.pyg_collate
+_partial_: true
+graph:
+  _target_: triforces.models.interaction.mace.mace_graph
+  r_max: 6.0
+  charges_key: Qs

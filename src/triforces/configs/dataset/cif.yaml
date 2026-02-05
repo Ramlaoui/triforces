@@ -1,0 +1,3 @@
+_target_: triforces.data.ase_contrastive.CifFolderDataset
+root: ${data_path}
+glob: "**/*.cif"

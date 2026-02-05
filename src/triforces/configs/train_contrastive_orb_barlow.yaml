@@ -1,0 +1,65 @@
+defaults:
+  - _self_
+  - dataset@bulk: bulk
+  - model: triforces_orb_barlow
+  - collate: orb
+  - contrastive: default
+
+collate:
+  _target_: triforces.data.pyg_collate
+  _partial_: true
+  graph:
+    _target_: triforces.models.interaction.orb.orb_graph
+    radius: 6.0
+    max_num_neighbors: 20
+    device: cpu
+
+dataset:
+  _target_: triforces.datasets.ContrastiveDataset
+  dataset: ${bulk}
+  return_pairs: true
+  n_augmentation_views: 2
+  n_opposite_views: 0
+  include_original: false
+  apply_augmentations_prob: 1.0
+  augmentations:
+    noise:
+      _target_: triforces.augmentations.CrystalNoiseAugmentation
+      noise_scale: [0.0, 0.05]
+
+train:
+  epochs: 1
+  batch_size: 8
+  lr: 0.001
+  tqdm: true
+  log_every: 10
+
+wandb:
+  enabled: false
+  project: triforces
+  entity: null
+  name: null
+  group: null
+  tags: []
+  job_type: null
+  mode: null
+
+loss:
+  _target_: triforces.losses.BarlowTwinsLoss
+  lambda_param: 0.005
+  lambda_node: 0.0
+  lambda_graph: 1.0
+  use_batch_norm: true
+  use_node_correspondence: false
+  auto_scale_lambda: true
+  reference_dim: 8192
+
+embed_dim: 512
+projection_dim: 128
+
+device: null
+max_atomic_number: 118
+
+hydra:
+  job:
+    chdir: false

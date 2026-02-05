@@ -1,0 +1,7 @@
+_target_: triforces.data.pyg_collate
+_partial_: true
+graph:
+  _target_: triforces.models.interaction.orb.orb_graph
+  radius: 6.0
+  max_num_neighbors: 20
+  device: cpu
