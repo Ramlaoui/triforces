@@ -3,9 +3,7 @@ name = "triforces"
 version = "0.1.0"
 description = "Pre-training framework for atomistic graph neural networks"
 readme = "README.md"
-authors = [
-    { name = "Ramlaoui", email = "ali.ramlaoui@entalpic.ai" }
-]
+authors = []
 requires-python = ">=3.11"
 dependencies = [
     "hydra-core>=1.3.2",
@@ -73,9 +71,6 @@ conflicts = [
 ]
 
 [project.optional-dependencies]
-atompack = [
-    "atompack @ git+https://github.com/Entalpic/atompack.git@main#subdirectory=atompack-py",
-]
 fairchem = [
     "fairchem-core>=1.4.0",
     "e3nn>=0.5.0",
