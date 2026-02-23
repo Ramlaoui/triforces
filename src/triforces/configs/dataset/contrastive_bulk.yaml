@@ -1,0 +1,13 @@
+_target_: triforces.datasets.AugmentationDataset
+dataset: ${bulk}
+return_pairs: true
+n_augmentation_views: 2
+n_opposite_views: 0
+include_original: false
+apply_augmentations_prob: 1.0
+augmentations:
+  noise:
+    _target_: triforces.augmentations.CrystalNoiseAugmentation
+    noise_scale: [0.05, 0.3]
+augmentation_probabilities:
+  noise: 1.0

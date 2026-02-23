@@ -1,0 +1,16 @@
+_target_: triforces.models.heads.DirectSupervisedHead
+_partial_: true
+
+# Behavior
+predict_energy: true
+predict_forces: true
+predict_stress: false
+stress_representation: voigt
+
+# MLP
+hidden_dims:
+  - ${model.backbone.output_dim}
+  - ${model.backbone.output_dim}
+activation: silu
+use_batch_norm: false
+dropout: 0.0

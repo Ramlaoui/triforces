@@ -46,7 +46,7 @@ def test_mace_graph_builds_edges():
 
 def test_fairchem_graphs_build_edges():
     pytest.importorskip("fairchem")
-    from triforces.models.interaction.esen import EsenGraph, UMAGraph
+    from triforces.models.interaction.esen import UMAGraph, esen_graph
 
     atoms = Atoms(
         numbers=[8, 8],
@@ -55,10 +55,11 @@ def test_fairchem_graphs_build_edges():
         pbc=True,
     )
 
-    esen_graph = EsenGraph(cutoff=2.5, max_neighbors=16)
-    esen_data = esen_graph(atoms)
+    graph = esen_graph(radius=2.5, max_num_neighbors=16, dataset="omat")
+    esen_data = graph(atoms)
     assert esen_data.edge_index.shape[0] == 2
     assert esen_data.edge_index.shape[1] > 0
+    assert esen_data.dataset == "omat"
 
     uma_graph = UMAGraph(radius=2.5, max_num_neighbors=16, dataset="omat")
     uma_data = uma_graph(atoms)

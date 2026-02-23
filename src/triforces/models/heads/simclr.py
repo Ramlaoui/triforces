@@ -1,23 +1,51 @@
 """Projection head for contrastive learning."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ...core.utils import create_mlp
+from ..mlp import create_mlp
 from ..outputs import BackboneOutputs
 
 
 class ProjectionHead(nn.Module):
-    """Projection head for contrastive learning."""
+    """Projection head for contrastive learning.
+
+    Parameters
+    ----------
+    input_dim : int
+        Input feature dimension.
+    node_projection_dim : int, optional
+        Output dimension for node projections.
+    graph_projection_dim : int, optional
+        Output dimension for graph projections.
+    compute_node_level : bool, default=True
+        Whether to compute node-level projections.
+    compute_graph_level : bool, default=True
+        Whether to compute graph-level projections.
+    reduce : str, default="mean"
+        Pooling reduction for graph features.
+    normalize_output : bool, default=False
+        Whether to L2-normalize projections.
+    dropout : float, default=0.0
+        Dropout probability in the MLP.
+    activation : str, default="relu"
+        Activation function name.
+    use_batch_norm : bool, default=True
+        Whether to use batch normalization.
+    projection_hidden_dims : list[int], optional
+        Hidden layer sizes for the projection MLP.
+    **kwargs : Any
+        Additional unused arguments.
+    """
 
     def __init__(
         self,
         input_dim: int,
-        node_projection_dim: Optional[int] = 128,
-        graph_projection_dim: Optional[int] = 128,
+        node_projection_dim: int | None = 128,
+        graph_projection_dim: int | None = 128,
         compute_node_level: bool = True,
         compute_graph_level: bool = True,
         reduce: str = "mean",
@@ -25,7 +53,7 @@ class ProjectionHead(nn.Module):
         dropout: float = 0.0,
         activation: str = "relu",
         use_batch_norm: bool = True,
-        projection_hidden_dims: Optional[List[int]] = None,
+        projection_hidden_dims: List[int] | None = None,
         **kwargs,
     ):
         super().__init__()
@@ -80,11 +108,33 @@ class ProjectionHead(nn.Module):
         else:
             self.graph_projector = None
 
+    @classmethod
+    def build_from_backbone_info(
+        cls, backbone_info: Dict[str, Any], **kwargs: Any
+    ) -> "ProjectionHead":
+        kwargs = dict(kwargs)
+        if kwargs.get("input_dim") is None:
+            output_dim = backbone_info.get("output_dim")
+            if output_dim is None:
+                raise ValueError(
+                    "ProjectionHead requires `input_dim` or backbone_info['output_dim']."
+                )
+            kwargs["input_dim"] = int(output_dim)
+        return cls(**kwargs)
+
+    def get_head_build_info(self) -> Dict[str, Any]:
+        info: Dict[str, Any] = {}
+        if isinstance(self.graph_projection_dim, int) and self.graph_projection_dim > 0:
+            info["projection_dim"] = int(self.graph_projection_dim)
+        elif isinstance(self.node_projection_dim, int) and self.node_projection_dim > 0:
+            info["projection_dim"] = int(self.node_projection_dim)
+        return info
+
     def forward(
         self,
         backbone_outputs: BackboneOutputs,
         batch: Any,
-        outputs: Optional[Dict[str, torch.Tensor]] = None,
+        outputs: Dict[str, torch.Tensor] | None = None,
         training: bool = False,
         transform: Any = None,
         **kwargs: Any,
@@ -119,7 +169,7 @@ class ProjectionHead(nn.Module):
         return out
 
     def _simple_pool(
-        self, x: torch.Tensor, batch: torch.Tensor, num_graphs: Optional[int] = None
+        self, x: torch.Tensor, batch: torch.Tensor, num_graphs: int | None = None
     ) -> torch.Tensor:
         if num_graphs is None:
             num_graphs = batch.max().item() + 1

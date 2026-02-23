@@ -1,0 +1,17 @@
+defaults:
+  - dataset: bulk
+  - model: esen/triforces
+  - /head@model.heads.proj: supervised/supervised_direct
+  - loss: supervised
+  - trainer@train: default
+  - logger: wandb
+  - _self_
+
+collate:
+  contrastive: false
+
+device: null
+
+hydra:
+  job:
+    chdir: false

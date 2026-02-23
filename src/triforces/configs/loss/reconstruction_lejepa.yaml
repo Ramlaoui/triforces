@@ -1,0 +1,13 @@
+_target_: triforces.losses.ReconstructionLoss
+base_weight: 1.0
+noise_weight: 1.0
+noise_key: noise_displacement
+prediction_target: noise
+base_loss:
+  _target_: triforces.losses.LeJEPALoss
+  embedding_key: graph_projections
+  prediction_weight: 1.0
+  sigreg_weight: 1.0
+  sigreg_univariate: EppsPulley
+  sigreg_num_points: 17
+  sigreg_num_slices: 1024

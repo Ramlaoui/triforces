@@ -1,7 +1,6 @@
-from pathlib import Path
-from typing import Callable, Optional
-
 import logging
+from typing import Callable
+
 import orb_models.forcefield.pretrained as pretrained
 import torch
 import torch.nn as nn
@@ -12,8 +11,7 @@ from orb_models.forcefield.calculator import ORBCalculator
 from torch_geometric.data import Batch, Data
 
 from triforces.models.base import Model
-from triforces.models.model_outputs import ModelOutputs
-from triforces.models.normalization import NormalizationState, NormalizationType
+from triforces.models.outputs import BackboneOutputs
 
 logger = logging.getLogger("triforces")
 
@@ -49,7 +47,9 @@ UNTRAINED_MODELS = {
 }
 
 
-class Orb(nn.Module):
+class Orb(Model):
+    triforces_graph_backend = "orb"
+
     def __init__(
         self,
         model: nn.Module | None = None,
@@ -59,13 +59,19 @@ class Orb(nn.Module):
         disable_stress: bool = False,
         remove_torque: bool = True,
         compute_displacement: bool = True,
+        targets: list[str] | None = None,
+        hook_fns: dict[str, Callable] | None = None,
+        freeze_weights: list[str] | None = None,
         **kwargs,
     ):
-        super().__init__()
-
-        self.hook_fns = {
-            "model.model": Orb.backbone_hook_fn,
-        }
+        merged_hook_fns = {"model.model": Orb.backbone_hook_fn}
+        if hook_fns:
+            merged_hook_fns.update(hook_fns)
+        super().__init__(
+            targets=targets,
+            hook_fns=merged_hook_fns,
+            freeze_weights=freeze_weights,
+        )
 
         # Orb-v3 require gradients for inference for the conservative model
         self.requires_grad_for_inference = "conservative" in model_type
@@ -109,6 +115,8 @@ class Orb(nn.Module):
 
     def disable_heads(self, disable_attributes: list[str] | None = None):
         super().disable_heads(disable_attributes)
+        if disable_attributes is None:
+            return
         if "forces" in disable_attributes:
             self.disable_forces = True
         if "stress" in disable_attributes:
@@ -122,7 +130,7 @@ class Orb(nn.Module):
         batch: Batch,
         training: bool = True,
         transform: Callable[..., Data] | None = None,
-    ) -> dict[str, torch.Tensor]:
+    ) -> BackboneOutputs:
         system_targets = {
             key: batch[key] for key in ["energy", "stress"] if hasattr(batch, key)
         }
@@ -173,107 +181,28 @@ class Orb(nn.Module):
             out["displacement"] = atom_graphs.system_features["stress_displacement"]
             out["generator"] = atom_graphs.system_features["generator"]
             out["pos"] = atom_graphs.node_features["positions"]
-
-        return out
-
-    def format_model_outputs(
-        self,
-        batch: Batch,
-        raw_model_outputs: dict[str, torch.Tensor],
-        add_keys: list[str] = [],
-    ) -> ModelOutputs:
-        # Check if we need to rename grad_forces/grad_stress to forces/stress
-        has_grad_outputs = (
-            "grad_forces" in raw_model_outputs or "grad_stress" in raw_model_outputs
-        )
-
-        if not self.pretrained:
-            # For non-pretrained models, just rename grad_forces/grad_stress if present
-            if has_grad_outputs:
-                if "grad_forces" in raw_model_outputs:
-                    raw_model_outputs["forces"] = raw_model_outputs.pop("grad_forces")
-                if "grad_stress" in raw_model_outputs:
-                    raw_model_outputs["stress"] = raw_model_outputs.pop("grad_stress")
-
-                # forces and stress are already unnormalized in this case (orb conservative)
-                model_outputs = super().format_model_outputs(batch, raw_model_outputs)
-
-                if model_outputs.normalization_state:
-                    model_outputs.normalization_state.remove_transform(
-                        NormalizationType.MODEL_OUTPUT, key="forces"
-                    )
-                    model_outputs.normalization_state.remove_transform(
-                        NormalizationType.MODEL_OUTPUT, key="stress"
-                    )
-                    model_outputs.normalization_state.remove_transform(
-                        NormalizationType.MODEL_OUTPUT, key="energy"
-                    )
-                    model_outputs.normalization_state.add_transform(
-                        "random_rotate", params={"key": "forces"}
-                    )
-
-                return model_outputs
-            return super().format_model_outputs(batch, raw_model_outputs)
-
-        batch_size = batch.num_graphs if hasattr(batch, "num_graphs") else 1
-        kwargs = {
-            "batch": batch.batch if hasattr(batch, "batch") else None,
-            "batch_size": batch_size,
-            "ptr": batch.ptr if hasattr(batch, "ptr") else None,
-            "attributes": {},
-        }
-
-        normalization_state = NormalizationState()
-
-        forces_key = "grad_forces" if "grad_forces" in raw_model_outputs else "forces"
-        stress_key = "grad_stress" if "grad_stress" in raw_model_outputs else "stress"
-
-        if "energy" in raw_model_outputs:
-            kwargs["energy"] = raw_model_outputs["energy"]
-            if "energy_denormalized" in raw_model_outputs:
-                kwargs["attributes"]["energy_denormalized"] = raw_model_outputs[
-                    "energy_denormalized"
-                ]
-                normalization_state.add_transform(
-                    NormalizationType.MODEL_OUTPUT,
-                    params={"model": self.get_model_name(), "key": "energy"},
-                )
-            # for predictions, they are already denormalized
-
-        if "forces" in self.targets:
-            kwargs["forces"] = raw_model_outputs[forces_key]
-            if "forces_denormalized" in raw_model_outputs:
-                kwargs["attributes"]["forces_denormalized"] = raw_model_outputs[
-                    "forces_denormalized"
-                ]
-                normalization_state.add_transform(
-                    NormalizationType.MODEL_OUTPUT,
-                    params={"model": self.get_model_name(), "key": "forces"},
-                )
-        if "stress" in self.targets:
-            kwargs["attributes"]["stress"] = raw_model_outputs[stress_key]
-            if "stress_denormalized" in raw_model_outputs:
-                kwargs["attributes"]["stress_denormalized"] = raw_model_outputs[
-                    "stress_denormalized"
-                ]
-                normalization_state.add_transform(
-                    NormalizationType.MODEL_OUTPUT,
-                    params={"model": self.get_model_name(), "key": "stress"},
-                )
-
-        # Handle additional outputs
-        for key, value in raw_model_outputs.items():
-            if key not in ["energy", "forces", "stress"] and value is not None:
-                kwargs["attributes"][key] = value
-                normalization_state.add_transform(
-                    NormalizationType.MODEL_OUTPUT, params={"key": key}
-                )
-
-        kwargs["normalization_state"] = normalization_state
-
-        model_outputs = ModelOutputs(**kwargs)
-        return self._format_model_outputs(
-            batch, raw_model_outputs, model_outputs, add_keys=add_keys
+        node_feats = out.get("node_feats")
+        if node_feats is None:
+            raise ValueError("ORB interaction output is missing `node_feats`.")
+        graph_feats = out.get("graph_feats")
+        if graph_feats is None:
+            batch_idx = getattr(batch, "batch", None)
+            if batch_idx is None:
+                graph_feats = node_feats.mean(dim=0, keepdim=True)
+            else:
+                num_graphs = getattr(batch, "num_graphs", None)
+                if num_graphs is None:
+                    num_graphs = int(batch_idx.max().item()) + 1 if batch_idx.numel() else 0
+                num_graphs = int(num_graphs)
+                graph_feats = node_feats.new_zeros((num_graphs, node_feats.size(-1)))
+                graph_feats.index_add_(0, batch_idx, node_feats)
+                counts = torch.bincount(batch_idx, minlength=num_graphs).clamp_min(1)
+                graph_feats = graph_feats / counts.to(graph_feats.dtype).unsqueeze(1)
+        extras = {k: v for k, v in out.items() if k not in {"node_feats", "graph_feats"}}
+        return BackboneOutputs(
+            node_feats=node_feats,
+            graph_feats=graph_feats,
+            extras=extras,
         )
 
     @staticmethod
@@ -295,7 +224,7 @@ class Orb(nn.Module):
 
         return backbone_outputs
 
-    def get_readout(self) -> tuple[nn.Module, int, Optional[nn.Module]]:
+    def get_readout(self) -> tuple[nn.Module, int, nn.Module | None]:
         return None, self.model.model.node_embed_size, None
 
     @classmethod
@@ -338,252 +267,6 @@ class Orb(nn.Module):
         }
         return {**base_info, **orb_info}
 
-    @classmethod
-    def from_direct_checkpoint(
-        cls,
-        checkpoint_path: str,
-        conservative_model_type: str = "orb-v3-conservative",
-        device: str = "cpu",
-        compile: bool = False,
-        strict: bool = False,
-        **kwargs,
-    ):
-        """Load a conservative ORB model from a direct model checkpoint.
-
-        This method allows transferring pre-trained weights from a direct ORB model
-        (which has separate force and stress heads) to a conservative ORB model
-        (which computes forces/stress via energy gradients). The backbone and energy
-        head weights are transferred, while force/stress head weights are ignored.
-
-        Parameters
-        ----------
-        checkpoint_path : str
-            Path to the checkpoint file (.pt, .pth, or .ckpt) containing the
-            direct model's state dict.
-        conservative_model_type : str, optional
-            The conservative model architecture to use. Must be a conservative
-            variant (e.g., "orb-v3-conservative"). Default: "orb-v3-conservative".
-        device : str, optional
-            Device to load the model on ("cpu", "cuda", "cuda:0", etc.).
-            Default: "cpu".
-        compile : bool, optional
-            Whether to compile the model with torch.compile. Default: False.
-        strict : bool, optional
-            If True, raises an error for missing/unexpected non-head keys.
-            If False, allows flexible loading. Default: False.
-            Note: Conservative models have grad_forces_normalizer and
-            grad_stress_normalizer which don't exist in direct models, so
-            strict=False is recommended for direct->conservative transfer.
-        **kwargs
-            Additional arguments passed to the Orb constructor.
-
-        Returns
-        -------
-        Orb
-            An Orb model instance with a conservative architecture and weights
-            transferred from the direct checkpoint.
-
-        Raises
-        ------
-        ValueError
-            If conservative_model_type is not a conservative architecture.
-        FileNotFoundError
-            If checkpoint_path does not exist.
-        RuntimeError
-            If strict=True and incompatible non-head weights are found.
-
-        Notes
-        -----
-        The transfer process:
-        1. Creates a new conservative model architecture
-        2. Loads the direct model's state dict from checkpoint
-        3. Transfers compatible weights:
-           - model.* (backbone/MoleculeGNS) - TRANSFERRED
-           - heads.energy.* (energy head) - TRANSFERRED
-           - heads.forces.* (force head) - IGNORED
-           - heads.stress.* (stress head) - IGNORED
-        4. Forces and stress are computed via autograd on energy
-
-        The backbone architectures must be compatible (same latent_dim,
-        num_message_passing_steps, etc.). This is guaranteed if you use
-        matching model versions (e.g., both orb-v3).
-
-        Examples
-        --------
-        >>> # Load conservative model from direct checkpoint
-        >>> model = Orb.from_direct_checkpoint(
-        ...     checkpoint_path="path/to/direct_model.pt",
-        ...     conservative_model_type="orb-v3-conservative",
-        ...     device="cuda",
-        ... )
-        >>>
-        >>> # Now use the model - forces computed via gradients
-        >>> outputs = model(batch)
-        >>> # Forces are energy-conservative: F = -dE/dpositions
-        """
-        if "conservative" not in conservative_model_type:
-            raise ValueError(
-                f"Model type '{conservative_model_type}' is not a conservative "
-                f"architecture. Use a model type containing 'conservative'."
-            )
-
-        # Verify checkpoint exists
-        checkpoint_path_obj = Path(checkpoint_path)
-        if not checkpoint_path_obj.exists():
-            raise FileNotFoundError(f"Checkpoint not found at: {checkpoint_path}")
-
-        logger.info(
-            f"Loading conservative model '{conservative_model_type}' "
-            f"from direct checkpoint: {checkpoint_path}"
-        )
-
-        # Create Orb wrapper first (with model=None, so pretrained=False)
-        # This properly initializes everything including normalizers
-        orb_model = cls(
-            model=None,  # Will create untrained model
-            model_type=conservative_model_type,
-            device=device,
-            **kwargs,
-        )
-
-        # Load the checkpoint
-        logger.info(f"Loading checkpoint from: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-
-        # Extract state_dict from checkpoint
-        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            state_dict = checkpoint["model_state_dict"]
-        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-            state_dict = checkpoint["state_dict"]
-        else:
-            state_dict = checkpoint
-
-        # Load compatible weights into the wrapped model
-        logger.info("Loading compatible weights...")
-        incompatible_keys = orb_model.model.load_state_dict(state_dict, strict=False)
-
-        if incompatible_keys and (
-            incompatible_keys.missing_keys or incompatible_keys.unexpected_keys
-        ):
-            logger.info(
-                f"Loaded checkpoint:\n"
-                f"  Missing keys (will use defaults): {len(incompatible_keys.missing_keys)}\n"
-                f"  Unexpected keys (ignored): {len(incompatible_keys.unexpected_keys)}"
-            )
-
-        logger.info(
-            f"✓ Conservative model loaded successfully\n"
-            f"  Model type: {conservative_model_type}\n"
-            f"  Pretrained: {orb_model.pretrained}\n"
-            f"  Device: {device}\n"
-            f"  Forces computed via: autograd (F = -dE/dpositions)\n"
-            f"  Stress computed via: autograd (S = dE/dcell / volume)"
-        )
-
-        return orb_model
-
-    @classmethod
-    def from_checkpoint_with_charge_spin(
-        cls,
-        checkpoint_path: str,
-        model_type: str = "orb-v3-direct-omol",
-        device: str = "cpu",
-        **kwargs,
-    ):
-        """Load an ORB model with charge/spin conditioning from a checkpoint without it.
-
-        This method creates a model architecture with ChargeSpinConditioner enabled,
-        then loads compatible weights from a checkpoint that was trained without
-        charge/spin conditioning. The conditioner parameters are randomly initialized.
-
-        Parameters
-        ----------
-        checkpoint_path : str
-            Path to the checkpoint file (.pt, .pth, or .ckpt).
-        model_type : str, optional
-            The model architecture to use. Should be an omol variant with
-            has_charge_spin_cond=True. Default: "orb-v3-direct-omol".
-        device : str, optional
-            Device to load the model on. Default: "cpu".
-        **kwargs
-            Additional arguments passed to the Orb constructor.
-
-        Returns
-        -------
-        Orb
-            An Orb model instance with charge/spin conditioning and weights
-            transferred from the checkpoint.
-        """
-        # Verify checkpoint exists
-        checkpoint_path_obj = Path(checkpoint_path)
-        if not checkpoint_path_obj.exists():
-            raise FileNotFoundError(f"Checkpoint not found at: {checkpoint_path}")
-
-        # Verify model type has charge/spin conditioning
-        if model_type not in UNTRAINED_MODELS:
-            raise ValueError(f"Unknown model type: {model_type}")
-        if not UNTRAINED_MODELS[model_type].get("has_charge_spin_cond", False):
-            raise ValueError(
-                f"Model type '{model_type}' does not have charge/spin conditioning. "
-                f"Use an omol variant (e.g., 'orb-v3-direct-omol', 'orb-v3-conservative-omol')."
-            )
-
-        logger.info(
-            f"Loading model '{model_type}' with charge/spin conditioning "
-            f"from checkpoint: {checkpoint_path}"
-        )
-
-        # Create model with charge/spin conditioning
-        orb_model = cls(
-            model=None,
-            model_type=model_type,
-            device=device,
-            **kwargs,
-        )
-
-        # Load the checkpoint
-        logger.info(f"Loading checkpoint from: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-
-        # Extract state_dict from checkpoint
-        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            state_dict = checkpoint["model_state_dict"]
-        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-            state_dict = checkpoint["state_dict"]
-        else:
-            state_dict = checkpoint
-
-        # Load compatible weights (ChargeSpinConditioner keys will be missing)
-        logger.info("Loading compatible weights...")
-        incompatible_keys = orb_model.model.load_state_dict(state_dict, strict=False)
-
-        # Log what was loaded
-        missing_conditioner = [
-            k for k in incompatible_keys.missing_keys if "conditioner" in k
-        ]
-        other_missing = [
-            k for k in incompatible_keys.missing_keys if "conditioner" not in k
-        ]
-
-        logger.info(
-            f"Loaded checkpoint:\n"
-            f"  ChargeSpinConditioner params (randomly initialized): {len(missing_conditioner)}\n"
-            f"  Other missing keys: {len(other_missing)}\n"
-            f"  Unexpected keys (ignored): {len(incompatible_keys.unexpected_keys)}"
-        )
-
-        if other_missing:
-            logger.warning(f"Missing non-conditioner keys: {other_missing[:10]}...")
-
-        logger.info(
-            f"✓ Model with charge/spin conditioning loaded successfully\n"
-            f"  Model type: {model_type}\n"
-            f"  Device: {device}\n"
-            f"  ChargeSpinConditioner: randomly initialized (will be trained)"
-        )
-
-        return orb_model
-
     @staticmethod
     def get_default_transforms(model: Model) -> "OrbGraph":
         system_config = model.model.system_config
@@ -605,6 +288,8 @@ class OrbGraph:
     device : str, default="cpu"
         Device for graph construction.
     """
+
+    triforces_graph_backend = "orb"
 
     def __init__(
         self,
@@ -628,7 +313,10 @@ class OrbGraph:
         )
 
         atom_graphs_dict = atom_graphs.to_dict()
-        atom_graphs_dict["pos"] = atom_graphs_dict["positions"]
+        atom_graphs_dict["pos"] = torch.as_tensor(
+            atom_graphs_dict["positions"], dtype=torch.float32
+        )
+        atom_graphs_dict["z"] = torch.as_tensor(atoms.numbers, dtype=torch.long)
         atom_graphs_dict["node_features"] = list(atom_graphs.node_features.keys())
         atom_graphs_dict["edge_features"] = list(atom_graphs.edge_features.keys())
         atom_graphs_dict["system_features"] = list(atom_graphs.system_features.keys())
@@ -636,6 +324,10 @@ class OrbGraph:
 
         edge_index = torch.stack([atom_graphs.senders, atom_graphs.receivers], axis=0)
         atom_graphs_dict["edge_index"] = edge_index
+        edge_vec = torch.as_tensor(atom_graphs_dict["vectors"], dtype=torch.float32)
+        edge_dist = edge_vec.norm(dim=-1)
+        atom_graphs_dict["edge_vec"] = edge_vec
+        atom_graphs_dict["edge_dist"] = edge_dist
 
         data = Data(**atom_graphs_dict, **kwargs)
 
@@ -676,3 +368,6 @@ def orb_graph(
         Graph builder instance.
     """
     return OrbGraph(radius=radius, max_num_neighbors=max_num_neighbors, device=device)
+
+
+orb_graph.triforces_graph_backend = "orb"

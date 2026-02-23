@@ -1,0 +1,15 @@
+_target_: triforces.models.heads.EnergyConservingHead
+_partial_: true
+
+predict_forces: true
+predict_stress: false
+forces_output_key: noise_displacement
+include_energy: false
+stress_representation: voigt
+
+hidden_dims:
+  - ${model.backbone.output_dim}
+  - ${model.backbone.output_dim}
+activation: silu
+use_batch_norm: false
+dropout: 0.0

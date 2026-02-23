@@ -6,9 +6,12 @@ from triforces.cli.train_contrastive import ALLOWED_DATASETS, validate_config
 
 def make_cfg(**overrides):
     base = {
-        "dataset": "cif",
-        "model": "triforces_esen",
-        "data_path": "/tmp/data",
+        "dataset": {
+            "_target_": "triforces.data.ase_contrastive.CifFolderDataset",
+            "root": "/tmp/data",
+            "glob": "**/*.cif",
+        },
+        "model": {"_target_": "triforces.models.adapter_model.AdapterModel"},
     }
     base.update(overrides)
     return OmegaConf.create(base)
@@ -38,13 +41,30 @@ def test_validate_config_rejects_missing_model():
 
 def test_validate_config_rejects_missing_data_path():
     cfg = make_cfg()
-    del cfg["data_path"]
+    del cfg["dataset"]["root"]
     with pytest.raises(ValueError) as excinfo:
         validate_config(cfg)
-    assert "data_path" in str(excinfo.value)
+    assert "dataset.root" in str(excinfo.value)
 
 
 def test_validate_config_allows_lemat_bulk_without_data_path():
-    cfg = make_cfg(dataset="lemat_bulk")
-    del cfg["data_path"]
+    cfg = make_cfg(
+        dataset={
+            "_target_": "triforces.data.lemat_bulk.LeMatBulkDataset",
+            "name": "compatible_pbe",
+            "split": "train",
+        }
+    )
     validate_config(cfg)
+
+
+def test_validate_config_requires_explicit_dataset_node():
+    cfg = OmegaConf.create(
+        {
+            "hydra": {"runtime": {"choices": {"dataset": "cif"}}},
+            "model": {"_target_": "triforces.models.adapter_model.AdapterModel"},
+        }
+    )
+    with pytest.raises(ValueError) as excinfo:
+        validate_config(cfg)
+    assert "Missing `dataset`" in str(excinfo.value)

@@ -1,0 +1,7 @@
+_target_: triforces.losses.BarlowTwinsLoss
+lambda_param: 0.005
+lambda_node: 0.0
+lambda_graph: 1.0
+use_batch_norm: true
+auto_scale_lambda: true
+reference_dim: 8192

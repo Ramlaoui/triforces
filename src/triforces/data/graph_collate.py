@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, Optional, Protocol, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
 from ase import Atoms
 from torch_geometric.data import Data
 
-from .pyg_collate import pyg_contrastive_collate
+from triforces.utils.stress import stress_array_to_voigt_6
 
+from .pyg_collate import pyg_contrastive_collate, pyg_supervised_collate
 
-class AtomsTransformLike(Protocol):
-    def __call__(self, atoms: Atoms, **kwargs) -> Data:  # pragma: no cover - protocol
-        ...
+AtomsTransform = Callable[..., Data]
 
 
 DEFAULT_INFO_KEYS = (
@@ -30,36 +29,9 @@ DEFAULT_INFO_KEYS = (
 DEFAULT_ARRAY_KEYS = (
     "forces",
     "noise_displacement",
+    "original_numbers",
+    "atom_mask",
 )
-GRAPH_OVERRIDE_KEYS = (
-    "graph_params",
-    "graph_radius",
-    "graph_max_num_neighbors",
-    "graph_max_neigh",
-    "graph_loop",
-    "graph_enforce_max_neighbors_strictly",
-    "graph_radius_pbc_version",
-    "graph_dataset",
-    "graph_device",
-    "graph_r_max",
-)
-
-
-def _stress_tensor_to_voigt(stress: np.ndarray) -> np.ndarray:
-    stress = np.asarray(stress, dtype=np.float32)
-    if stress.shape != (3, 3):
-        stress = stress.reshape(3, 3)
-    return np.array(
-        [
-            stress[0, 0],
-            stress[1, 1],
-            stress[2, 2],
-            stress[1, 2],
-            stress[0, 2],
-            stress[0, 1],
-        ],
-        dtype=np.float32,
-    )
 
 
 def _as_tensor(value: Any, *, dtype: torch.dtype) -> torch.Tensor:
@@ -84,80 +56,9 @@ def _extract_node_correspondence(atoms: Atoms, n: int) -> torch.Tensor:
     return _as_tensor(corr, dtype=torch.long)
 
 
-def _extract_graph_overrides(atoms: Atoms) -> dict[str, Any]:
-    info = getattr(atoms, "info", None) or {}
-    overrides: dict[str, Any] = {}
-
-    params = info.get("graph_params")
-    if isinstance(params, dict):
-        overrides.update(params)
-
-    if "graph_radius" in info:
-        overrides["radius"] = info["graph_radius"]
-    if "graph_max_num_neighbors" in info:
-        overrides["max_num_neighbors"] = info["graph_max_num_neighbors"]
-    if "graph_max_neigh" in info:
-        overrides["max_neigh"] = info["graph_max_neigh"]
-    if "graph_loop" in info:
-        overrides["loop"] = info["graph_loop"]
-    if "graph_enforce_max_neighbors_strictly" in info:
-        overrides["enforce_max_neighbors_strictly"] = info[
-            "graph_enforce_max_neighbors_strictly"
-        ]
-    if "graph_radius_pbc_version" in info:
-        overrides["radius_pbc_version"] = info["graph_radius_pbc_version"]
-    if "graph_dataset" in info:
-        overrides["dataset"] = info["graph_dataset"]
-    if "graph_device" in info:
-        overrides["device"] = info["graph_device"]
-    if "graph_r_max" in info:
-        overrides["r_max"] = info["graph_r_max"]
-
-    return overrides
-
-
-def _apply_overrides(transform: AtomsTransformLike, overrides: dict[str, Any]):
-    if not overrides:
-        return {}
-
-    saved: dict[str, Any] = {}
-    for key, value in overrides.items():
-        if hasattr(transform, key):
-            saved[key] = getattr(transform, key)
-            setattr(transform, key, value)
-
-    if ("radius" in overrides or "max_num_neighbors" in overrides) and hasattr(
-        transform, "system_config"
-    ):
-        try:
-            from orb_models.forcefield.atomic_system import SystemConfig
-
-            radius = overrides.get("radius", getattr(transform, "radius", None))
-            max_num_neighbors = overrides.get(
-                "max_num_neighbors", getattr(transform, "max_num_neighbors", None)
-            )
-            if radius is not None and max_num_neighbors is not None:
-                saved["system_config"] = getattr(transform, "system_config", None)
-                transform.system_config = SystemConfig(
-                    radius=float(radius), max_num_neighbors=int(max_num_neighbors)
-                )
-        except Exception:
-            pass
-
-    return saved
-
-
-def _restore_overrides(transform: AtomsTransformLike, saved: dict[str, Any]):
-    if not saved:
-        return
-    for key, value in saved.items():
-        if hasattr(transform, key):
-            setattr(transform, key, value)
-
-
 def _extract_noise(
     atoms: Atoms, n: int, has_noise_any: bool
-) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     if not has_noise_any:
         return None, None
     if _has_array(atoms, "noise_displacement"):
@@ -171,7 +72,7 @@ def _extract_noise(
 
 def _extract_forces(
     atoms: Atoms, n: int, has_forces_any: bool
-) -> Optional[torch.Tensor]:
+) -> torch.Tensor | None:
     if not has_forces_any:
         return None
     if _has_array(atoms, "forces"):
@@ -181,18 +82,54 @@ def _extract_forces(
     return _as_tensor(forces, dtype=torch.float32)
 
 
+def _extract_original_numbers(
+    atoms: Atoms, n: int, has_original_any: bool
+) -> torch.Tensor | None:
+    if not has_original_any:
+        return None
+    if _has_array(atoms, "original_numbers"):
+        original_numbers = np.asarray(atoms.arrays["original_numbers"], dtype=np.int64)
+    else:
+        original_numbers = np.asarray(atoms.numbers, dtype=np.int64)
+    if original_numbers.shape != (n,):
+        original_numbers = original_numbers.reshape(-1)[:n]
+    return _as_tensor(original_numbers, dtype=torch.long)
+
+
+def _extract_atom_mask(
+    atoms: Atoms, n: int, has_mask_any: bool
+) -> torch.Tensor | None:
+    if not has_mask_any:
+        return None
+    if _has_array(atoms, "atom_mask"):
+        atom_mask = np.asarray(atoms.arrays["atom_mask"], dtype=bool)
+    else:
+        atom_mask = np.zeros((n,), dtype=bool)
+    if atom_mask.shape != (n,):
+        atom_mask = atom_mask.reshape(-1)[:n]
+    return _as_tensor(atom_mask, dtype=torch.bool)
+
+
 def _extract_info_tensor(
     atoms: Atoms,
     key: str,
     *,
     n: int,
     has_any: bool,
-) -> Optional[torch.Tensor]:
+) -> torch.Tensor | None:
     if not has_any:
         return None
 
     value = _get_info(atoms, key)
     if value is None:
+        if key == "rotation_matrix":
+            value = np.eye(3, dtype=np.float32)
+        elif key == "cell_noise_displacement":
+            value = np.zeros((3, 3), dtype=np.float32)
+        elif key == "stress":
+            value = np.full((6,), np.nan, dtype=np.float32)
+        elif key == "stress_tensor":
+            value = np.full((3, 3), np.nan, dtype=np.float32)
         if key == "energy_per_atom":
             energy = _get_info(atoms, "energy")
             if energy is not None:
@@ -201,7 +138,7 @@ def _extract_info_tensor(
             value = np.nan
 
     if key == "stress" and value is not None and np.asarray(value).shape == (3, 3):
-        value = _stress_tensor_to_voigt(value)
+        value = stress_array_to_voigt_6(np.asarray(value))
     if key == "stress_tensor" and value is not None and np.asarray(value).shape == (6,):
         value = np.asarray(value, dtype=np.float32).reshape(3, 3)
 
@@ -212,10 +149,8 @@ def _extract_info_tensor(
 def _atoms_to_graph(
     atoms: Atoms,
     *,
-    transform: AtomsTransformLike,
+    transform: AtomsTransform,
     pair_id: int | None,
-    info_keys: Sequence[str],
-    array_keys: Sequence[str],
     has_any: dict[str, bool],
 ) -> Data:
     n = len(atoms)
@@ -232,27 +167,23 @@ def _atoms_to_graph(
     if forces is not None:
         kwargs["forces"] = forces
 
-    for key in info_keys:
-        if key not in DEFAULT_INFO_KEYS:
-            continue
+    original_numbers = _extract_original_numbers(atoms, n, has_any["original_numbers"])
+    if original_numbers is not None:
+        kwargs["original_numbers"] = original_numbers
+
+    atom_mask = _extract_atom_mask(atoms, n, has_any["atom_mask"])
+    if atom_mask is not None:
+        kwargs["atom_mask"] = atom_mask
+
+    for key in DEFAULT_INFO_KEYS:
         tensor = _extract_info_tensor(atoms, key, n=n, has_any=has_any[key])
         if tensor is not None:
             kwargs[key] = tensor
 
-    overrides = _extract_graph_overrides(atoms)
-    saved = _apply_overrides(transform, overrides)
-    try:
-        data = transform(atoms, **kwargs)
-    finally:
-        _restore_overrides(transform, saved)
+    data = transform(atoms, **kwargs)
 
     if pair_id is not None:
         data.pair_id = torch.as_tensor(int(pair_id), dtype=torch.long)
-
-    if not hasattr(data, "z") and hasattr(data, "atomic_numbers"):
-        data.z = data.atomic_numbers
-    if not hasattr(data, "pos") and hasattr(data, "positions"):
-        data.pos = data.positions
 
     # Ensure kwargs are present even if transform ignores them
     for key, value in kwargs.items():
@@ -262,33 +193,32 @@ def _atoms_to_graph(
     return data
 
 
-def graph_contrastive_collate(
-    samples: Sequence[Any],
-    *,
-    transform: AtomsTransformLike,
-    info_keys: Optional[Sequence[str]] = None,
-    array_keys: Optional[Sequence[str]] = None,
-):
+def _flatten_samples(samples: Sequence[Any]) -> list[Any]:
     flat_samples: list[Any] = []
     for sample in samples:
         if isinstance(sample, (list, tuple)):
             flat_samples.extend(sample)
         else:
             flat_samples.append(sample)
+    return flat_samples
 
+
+def _atoms_samples_to_data_list(
+    flat_samples: Sequence[Any],
+    *,
+    transform: AtomsTransform,
+    include_pair_id: bool,
+) -> list[Data]:
     if not flat_samples:
         raise ValueError("Empty batch")
 
-    info_keys = tuple(info_keys or DEFAULT_INFO_KEYS)
-    array_keys = tuple(array_keys or DEFAULT_ARRAY_KEYS)
-
-    has_any = {key: False for key in (*info_keys, *array_keys)}
+    has_any = {key: False for key in (*DEFAULT_INFO_KEYS, *DEFAULT_ARRAY_KEYS)}
     for sample in flat_samples:
         atoms = sample.atoms
-        for key in array_keys:
+        for key in DEFAULT_ARRAY_KEYS:
             if _has_array(atoms, key):
                 has_any[key] = True
-        for key in info_keys:
+        for key in DEFAULT_INFO_KEYS:
             if _get_info(atoms, key) is not None:
                 has_any[key] = True
 
@@ -296,38 +226,86 @@ def graph_contrastive_collate(
         _atoms_to_graph(
             sample.atoms,
             transform=transform,
-            pair_id=getattr(sample, "pair_id", None),
-            info_keys=info_keys,
-            array_keys=array_keys,
+            pair_id=(getattr(sample, "pair_id", None) if include_pair_id else None),
             has_any=has_any,
         )
         for sample in flat_samples
     ]
+    return data_list
 
+
+def graph_supervised_collate(
+    samples: Sequence[Any],
+    *,
+    transform: AtomsTransform,
+):
+    """Collate an atoms-based batch into a PyG batch without pair metadata."""
+    flat_samples = _flatten_samples(samples)
+    data_list = _atoms_samples_to_data_list(
+        flat_samples, transform=transform, include_pair_id=False
+    )
+    return pyg_supervised_collate(data_list)
+
+
+def graph_contrastive_collate(
+    samples: Sequence[Any],
+    *,
+    transform: AtomsTransform,
+):
+    """Collate an atoms-based batch into a PyG contrastive batch."""
+    flat_samples = _flatten_samples(samples)
+    data_list = _atoms_samples_to_data_list(
+        flat_samples, transform=transform, include_pair_id=True
+    )
     return pyg_contrastive_collate(data_list)
 
 
 def pyg_collate(
     samples: Sequence[Any],
     *,
-    graph: AtomsTransformLike,
-    info_keys: Optional[Sequence[str]] = None,
-    array_keys: Optional[Sequence[str]] = None,
+    graph: AtomsTransform,
+    contrastive: bool = True,
 ):
-    return graph_contrastive_collate(
-        samples, transform=graph, info_keys=info_keys, array_keys=array_keys
-    )
+    """Collate atoms samples using ``graph`` transform.
+
+    Parameters
+    ----------
+    samples : Sequence[Any]
+        Batch samples.
+    graph : Callable[..., Data]
+        Graph builder to use for each sample.
+    contrastive : bool, default=True
+        If True, require ``pair_id`` and add contrastive pair indices.
+    Returns
+    -------
+    Batch
+        Collated PyG batch.
+    """
+    if contrastive:
+        return graph_contrastive_collate(samples, transform=graph)
+    return graph_supervised_collate(samples, transform=graph)
 
 
 def build_graph_collate(
-    transform: AtomsTransformLike,
+    transform: AtomsTransform,
     *,
-    info_keys: Optional[Sequence[str]] = None,
-    array_keys: Optional[Sequence[str]] = None,
+    contrastive: bool = True,
 ) -> Callable[[Sequence[Any]], Any]:
+    """Build a closure suitable to pass as a DataLoader ``collate_fn``.
+
+    Parameters
+    ----------
+    transform : Callable[..., Data]
+        Graph builder converting ASE ``Atoms`` to PyG ``Data``.
+    contrastive : bool, default=True
+        If True, require pair metadata and add contrastive pair indices.
+    Returns
+    -------
+    Callable[[Sequence[Any]], Any]
+        Collate function for a PyTorch DataLoader.
+    """
+
     def _collate(samples: Sequence[Any]):
-        return graph_contrastive_collate(
-            samples, transform=transform, info_keys=info_keys, array_keys=array_keys
-        )
+        return pyg_collate(samples, graph=transform, contrastive=contrastive)
 
     return _collate

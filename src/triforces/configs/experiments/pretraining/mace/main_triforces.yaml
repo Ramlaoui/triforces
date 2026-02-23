@@ -1,0 +1,70 @@
+# @package _global_
+
+defaults:
+  - /dataset@bulk: bulk
+  - /dataset: augmentation_bulk
+  - /collate: mace
+  - /model@backbone: mace/triforces
+  - /head@model.heads.proj: contrastive/simclr
+  - /head@model.heads.denoise: contrastive/denoising_energy_conserving
+  - /head@model.heads.unmask: contrastive/classification
+  - /loss: reconstruction_lejepa
+  - /trainer@train: default
+  - /logger: wandb
+  - _self_
+
+model:
+  _target_: triforces.models.adapter_model.AdapterModel
+  backbone: ${backbone}
+  heads: {}
+
+train:
+  lr: 3e-4
+
+backbone:
+  output_dim: 512
+
+dataset:
+  return_pairs: true
+  n_augmentation_views: 2
+  n_opposite_views: 0
+  include_original: false
+  apply_augmentations_prob: 1.0
+  augmentation_probabilities:
+    noise: 1.0
+    rotate: 1.0
+    mask: 1.0
+  augmentations:
+    noise:
+      _target_: triforces.augmentations.CrystalNoiseAugmentation
+      noise_scale: [0.0, 0.05]
+    rotate:
+      _target_: triforces.augmentations.RandomRotation
+      max_angle: 180
+    mask:
+      _target_: triforces.augmentations.AtomMasking
+      mask_prob: [0.1, 0.3]
+      mask_token: 0
+      strategy: random
+      mask_mode: fixed
+
+loss:
+  noise_weight: 10.0
+  atom_type_weight: 1.0
+  base_weight: 0.1
+
+device: null
+
+logger:
+  enabled: true
+  project: triforces
+  entity: null
+  name: null
+  group: null
+  tags: []
+  job_type: null
+  mode: null
+
+hydra:
+  job:
+    chdir: false

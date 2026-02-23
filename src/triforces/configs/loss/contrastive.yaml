@@ -1,0 +1,4 @@
+_target_: triforces.losses.ContrastiveLoss
+temperature_graph: 0.1
+lambda_node: 0.0
+lambda_graph: 1.0

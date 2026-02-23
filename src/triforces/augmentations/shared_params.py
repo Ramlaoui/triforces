@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 
 class SharedAugmentationParams:
@@ -18,7 +18,7 @@ class SharedAugmentationParams:
     dataloader workers read the latest values.
     """
 
-    def __init__(self, initial_params: Optional[Dict[str, Any]] = None):
+    def __init__(self, initial_params: Dict[str, Any] | None = None):
         self.manager = mp.Manager()
         self.params = self.manager.dict()
         self._lock = self.manager.Lock()

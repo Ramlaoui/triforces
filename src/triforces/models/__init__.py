@@ -1,15 +1,27 @@
 from .adapter_model import AdapterModel
-from .triforces import TriForcesModel, build_triforces_model
-from .heads import ProjectionHead, BarlowTwinsProjectionHead
+from .heads import (
+    BarlowTwinsProjectionHead,
+    ClassificationHead,
+    DirectVectorHead,
+    DirectSupervisedHead,
+    EnergyConservingHead,
+    EquivariantVectorHead,
+    ProjectionHead,
+)
+from .outputs import BackboneOutputs
 from .structural_stream import StructuralStreamPowerSpectrum
+from .triforces import TriForcesModel
 
 __all__ = [
     "BackboneOutputs",
     "AdapterModel",
     "TriForcesModel",
-    "build_triforces_model",
     "StructuralStreamPowerSpectrum",
-    "TriForcesStructBackbone",
     "ProjectionHead",
     "BarlowTwinsProjectionHead",
+    "DirectVectorHead",
+    "ClassificationHead",
+    "DirectSupervisedHead",
+    "EnergyConservingHead",
+    "EquivariantVectorHead",
 ]

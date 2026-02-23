@@ -1,0 +1,13 @@
+_target_: triforces.models.heads.BYOLPredictorHead
+_partial_: true
+
+# This head reads existing projections from `outputs` and produces predictions.
+# Use it after a projection head (e.g. contrastive/byol/projection), or use BYOLCombinedHead.
+
+# MLP
+hidden_dim: 2048
+use_bn: true
+
+# Behavior
+compute_node_level: true
+compute_graph_level: true

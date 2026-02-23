@@ -1,4 +1,4 @@
-_target_: triforces.datasets.ContrastiveDataset
+_target_: triforces.datasets.AugmentationDataset
 return_pairs: true
 n_augmentation_views: 2
 n_opposite_views: 0
@@ -8,3 +8,5 @@ augmentations:
   noise:
     _target_: triforces.augmentations.CrystalNoiseAugmentation
     noise_scale: [0.0, 0.05]
+augmentation_probabilities:
+  noise: 1.0

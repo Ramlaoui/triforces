@@ -1,0 +1,37 @@
+# @package _global_
+
+defaults:
+  - /dataset: bulk
+  - /model: orb/triforces
+  - /head@model.heads.proj: supervised/supervised_direct
+  - /loss: supervised
+  - /trainer@train: default
+  - /logger: wandb
+  - _self_
+
+collate:
+  contrastive: false
+
+dataset:
+  add_targets:
+    - energy
+    - forces
+
+loss:
+  energy_weight: 1.0
+  forces_weight: 1.0
+  stress_weight: 0.0
+
+model:
+  backbone:
+    interaction:
+      model_type: orb-v3-direct
+      disable_forces: true
+      disable_stress: true
+      compute_displacement: false
+
+device: null
+
+hydra:
+  job:
+    chdir: false

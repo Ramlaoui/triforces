@@ -1,7 +1,6 @@
 """Crystal augmentations for ASE ``Atoms`` objects."""
 
 import random
-from typing import Optional
 
 import numpy as np
 import spglib
@@ -49,22 +48,22 @@ class CrystalNoiseAugmentation:
             object.__setattr__(self, "_noise_scale_max", None)
 
     @property
-    def noise_scale_min(self) -> Optional[float]:
+    def noise_scale_min(self) -> float | None:
         return self._noise_scale_min
 
     @noise_scale_min.setter
-    def noise_scale_min(self, value: Optional[float]):
+    def noise_scale_min(self, value: float | None):
         object.__setattr__(
             self, "_noise_scale_min", None if value is None else float(value)
         )
         self._sync_noise_scale_from_bounds()
 
     @property
-    def noise_scale_max(self) -> Optional[float]:
+    def noise_scale_max(self) -> float | None:
         return self._noise_scale_max
 
     @noise_scale_max.setter
-    def noise_scale_max(self, value: Optional[float]):
+    def noise_scale_max(self, value: float | None):
         object.__setattr__(
             self, "_noise_scale_max", None if value is None else float(value)
         )
@@ -352,10 +351,10 @@ class RandomUnitCellPerturbation:
 
             strain = np.random.randn(3, 3) * strain_scale
             strain = (strain + strain.T) / 2
-            I = np.eye(3)
+            identity = np.eye(3)
 
             original_cell = atoms.cell.array.copy()
-            new_cell = original_cell @ (I + strain)
+            new_cell = original_cell @ (identity + strain)
             new_atoms.set_cell(new_cell, scale_atoms=False)
 
             # Track cell displacement for denoising (new_cell - original_cell)
@@ -543,7 +542,7 @@ class AtomMasking:
         strategy: str = "random",
         mask_mode: str = "fixed",
         random_element_range: tuple[int, int] = (1, 80),
-        exclude_elements: Optional[list[int]] = [
+        exclude_elements: list[int] | None = [
             84,
             85,
             86,
@@ -661,22 +660,22 @@ class AtomMasking:
             object.__setattr__(self, "_mask_prob_max", None)
 
     @property
-    def mask_prob_min(self) -> Optional[float]:
+    def mask_prob_min(self) -> float | None:
         return self._mask_prob_min
 
     @mask_prob_min.setter
-    def mask_prob_min(self, value: Optional[float]):
+    def mask_prob_min(self, value: float | None):
         object.__setattr__(
             self, "_mask_prob_min", None if value is None else float(value)
         )
         self._sync_mask_prob_from_bounds()
 
     @property
-    def mask_prob_max(self) -> Optional[float]:
+    def mask_prob_max(self) -> float | None:
         return self._mask_prob_max
 
     @mask_prob_max.setter
-    def mask_prob_max(self, value: Optional[float]):
+    def mask_prob_max(self, value: float | None):
         object.__setattr__(
             self, "_mask_prob_max", None if value is None else float(value)
         )
@@ -713,26 +712,21 @@ class AtomMasking:
         min_prob = self._mask_prob_min
         max_prob = self._mask_prob_max
 
-        if min_prob is not None or max_prob is not None:
-            if min_prob is None:
-                min_prob = max_prob
-            if max_prob is None:
-                max_prob = min_prob
+        if min_prob is None and max_prob is None:
+            raise ValueError("mask_prob must be configured before sampling.")
+        if min_prob is None:
+            min_prob = max_prob
+        if max_prob is None:
+            max_prob = min_prob
 
-            if min_prob == max_prob:
-                return float(min_prob)
+        if min_prob == max_prob:
+            return float(min_prob)
 
-            low = float(min(min_prob, max_prob))
-            high = float(max(min_prob, max_prob))
-            return float(np.random.uniform(low, high))
+        low = float(min(min_prob, max_prob))
+        high = float(max(min_prob, max_prob))
+        return float(np.random.uniform(low, high))
 
-        # Fallback for legacy paths when only mask_prob is provided
-        if isinstance(self.mask_prob, (list, tuple)) and len(self.mask_prob) >= 2:
-            return float(np.random.uniform(self.mask_prob[0], self.mask_prob[1]))
-
-        return float(self.mask_prob)
-
-    def _get_wyckoff_positions(self, atoms: Atoms) -> Optional[np.ndarray]:
+    def _get_wyckoff_positions(self, atoms: Atoms) -> np.ndarray | None:
         """Extract Wyckoff position labels for each atom using spglib.
 
         Parameters
@@ -777,6 +771,7 @@ class AtomMasking:
         new_atoms = atoms.copy()
         n_atoms = len(atoms)
         original_numbers = atoms.numbers.copy()
+        atom_mask = np.zeros((n_atoms,), dtype=bool)
 
         # Sample mask probability (supports schedulable min/max bounds)
         mask_prob = self._sample_mask_probability()
@@ -834,7 +829,6 @@ class AtomMasking:
                     effective_labels = wyckoff_labels
 
                 unique_positions = np.unique(effective_labels)
-                n_positions = len(unique_positions)
 
                 # Sample Wyckoff positions to mask until we reach target mask_prob
                 target_n_masked = int(n_atoms * mask_prob)
@@ -865,14 +859,11 @@ class AtomMasking:
             mask_indices = self._get_spatial_neighbors(
                 atoms, mask_indices, self.mask_neighbor_cutoff
             )
+        mask_indices = np.asarray(mask_indices, dtype=np.int64)
+        if mask_indices.size > 0:
+            atom_mask[mask_indices] = True
 
         if len(mask_indices) > 0:
-            if (
-                hasattr(new_atoms, "arrays")
-                and "original_numbers" not in new_atoms.arrays
-            ):
-                new_atoms.arrays["original_numbers"] = atoms.numbers.copy()
-
             # Apply masking based on mode
             if self.mask_mode == "random_element":
                 # Replace each masked atom with a random element from the list
@@ -883,6 +874,8 @@ class AtomMasking:
                 # Fixed mask token (original behavior)
                 new_atoms.numbers[mask_indices] = self.mask_token
 
+        new_atoms.arrays["original_numbers"] = original_numbers.astype(np.int64)
+        new_atoms.arrays["atom_mask"] = atom_mask
         new_atoms.info["original_numbers"] = original_numbers
 
         if self.return_mask:
@@ -906,8 +899,11 @@ class FullAtomMasking:
 
     def __call__(self, atoms: Atoms) -> Atoms:
         new_atoms = atoms.copy()
+        n_atoms = len(atoms)
         if "original_numbers" not in new_atoms.info:
             new_atoms.info["original_numbers"] = atoms.numbers.copy()
+        new_atoms.arrays["original_numbers"] = np.asarray(atoms.numbers, dtype=np.int64)
+        new_atoms.arrays["atom_mask"] = np.ones((n_atoms,), dtype=bool)
         masked = np.full(len(atoms), self.mask_token, dtype=int)
         new_atoms.set_atomic_numbers(masked)
         new_atoms.info["full_masking"] = True
@@ -925,7 +921,7 @@ class CompositeAugmentation:
         Per-augmentation application probabilities. Defaults to all 1.0.
     """
 
-    def __init__(self, augmentations: list, probabilities: Optional[list] = None):
+    def __init__(self, augmentations: list, probabilities: list | None = None):
         self.augmentations = augmentations
         self.probabilities = probabilities or [1.0] * len(augmentations)
 
@@ -950,7 +946,7 @@ class RandomAugmentation:
         Sampling weights for each augmentation.
     """
 
-    def __init__(self, augmentations: list, weights: Optional[list] = None):
+    def __init__(self, augmentations: list, weights: list | None = None):
         self.augmentations = augmentations
         self.weights = weights
 

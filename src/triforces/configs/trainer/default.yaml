@@ -1,0 +1,50 @@
+epochs: 1
+batch_size: 8
+lr: 0.001
+tqdm: true
+log_every: 10
+checkpoint:
+  enabled: true
+  dir: null
+  save_every_epochs: 1
+  save_last: true
+  save_best: true
+  keep_last_n: 5
+  monitor: loss
+  mode: min
+  resume_from: null
+  resume_strict: true
+  init_from: null
+  init_mode: full
+  init_strict: false
+
+hooks:
+  linear_probe:
+    enabled: false
+    every_n_steps: null
+    every_n_epochs: 5
+    run_on_final_epoch: true
+    use_base_dataset: true
+    batch_size: null
+    num_workers: 0
+    progress_every_batches: 500
+    embedding_key: graph_projections
+    max_samples: 30000
+    test_size: 0.2
+    random_seed: 42
+    ridge_alpha: 1.0
+    min_samples: 24
+    log_prefix: linear_probe
+    regression_properties:
+      - n_atoms
+      - mean_atomic_number
+      - volume_per_atom
+      - density
+      - lattice_anisotropy
+      - mean_nn_distance
+      - packing_fraction
+      - energy_per_atom
+      - formation_energy_per_atom
+    classification_properties:
+      - chemical_family
+      - crystal_system

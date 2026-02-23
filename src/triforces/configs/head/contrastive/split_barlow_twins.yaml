@@ -1,0 +1,23 @@
+_target_: triforces.models.heads.SplitBarlowTwinsProjectionHead
+_partial_: true
+
+# Feature dims
+projection_dim: 128 # must be even when branch_projection_dim is not set
+
+# Behavior
+compute_node_level: true
+compute_graph_level: true
+reduce: mean
+
+# Projector
+hidden_dims:
+  - ${model.backbone.output_dim}
+  - ${model.backbone.output_dim}
+  - ${model.backbone.output_dim}
+use_bn: true
+dropout: 0.0
+
+# Optional
+# split_dim: null            # defaults to input_dim // 2
+# branch_projection_dim: null # defaults to projection_dim // 2
+# branch_names: [comp, geom]

@@ -1,4 +1,5 @@
-from typing import Callable, Optional
+import logging
+from typing import Callable
 
 import numpy as np
 import torch
@@ -12,9 +13,9 @@ from mace.tools.scripts_utils import extract_model
 from mace.tools.utils import AtomicNumberTable
 from torch_geometric.data import Batch, Data
 
-import logging
-
 from triforces.models.base import Model
+from triforces.models.outputs import BackboneOutputs
+from triforces.utils.stress import stress_to_voigt_6
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,8 @@ torch._functorch.config.donated_buffer = False
 
 
 class MACE(Model):
+    triforces_graph_backend = "mace"
+
     """MACE model implementation.
 
     Parameters
@@ -53,12 +56,12 @@ class MACE(Model):
         model_type: str = "small",
         device: str = "cpu",
         default_dtype: str = "float32",
-        model_foundation: Optional[nn.Module] = None,
+        model_foundation: nn.Module | None = None,
         disable_forces: bool = False,
         disable_stress: bool = False,
-        targets: Optional[list[str]] = None,
-        hook_fns: Optional[dict[str, Callable]] = None,
-        freeze_weights: Optional[list[str]] = None,
+        targets: list[str] | None = None,
+        hook_fns: dict[str, Callable] | None = None,
+        freeze_weights: list[str] | None = None,
         **kwargs,
     ):
         super().__init__(
@@ -70,11 +73,13 @@ class MACE(Model):
 
         self.model = model_foundation
         if self.model is None:
-            # Load the config from the foundation model, but reinitialize the model
+            # Load the foundation model (pretrained weights) via MACE's helper.
             calc = mace_mp(
                 model=model_type, device=device, default_dtype=default_dtype, **kwargs
             )
-            self.model = build_default_model()
+            self.model = calc.models[0]
+            for param in self.model.parameters():
+                param.requires_grad = True
 
         # Store readout information before `torch.fx.symbolic_trace`
         self.readout_info = {
@@ -107,8 +112,18 @@ class MACE(Model):
         self,
         batch: Batch,
         training: bool = True,
+        transform: Callable[..., Data] | None = None,
         skip_displacement: bool = False,
-    ) -> dict[str, torch.Tensor]:
+    ) -> BackboneOutputs:
+        _ = transform
+        if self.requires_grad_for_inference and hasattr(batch, "pos"):
+            pos = batch.pos
+            if torch.is_tensor(pos) and not pos.requires_grad:
+                pos = pos.detach().requires_grad_(True)
+                batch.pos = pos
+                if hasattr(batch, "positions"):
+                    batch.positions = pos
+
         batch_dict = batch._store._mapping
 
         # If skip_displacement=True, the caller has already applied displacement
@@ -135,7 +150,30 @@ class MACE(Model):
             training=training,
         )
 
-        return out
+        node_feats = out.get("node_feats")
+        if node_feats is None:
+            raise ValueError("MACE interaction output is missing `node_feats`.")
+        graph_feats = out.get("graph_feats")
+        if graph_feats is None:
+            batch_idx = getattr(batch, "batch", None)
+            if batch_idx is None:
+                graph_feats = node_feats.mean(dim=0, keepdim=True)
+            else:
+                num_graphs = getattr(batch, "num_graphs", None)
+                if num_graphs is None:
+                    num_graphs = int(batch_idx.max().item()) + 1 if batch_idx.numel() else 0
+                num_graphs = int(num_graphs)
+                graph_feats = node_feats.new_zeros((num_graphs, node_feats.size(-1)))
+                graph_feats.index_add_(0, batch_idx, node_feats)
+                counts = torch.bincount(batch_idx, minlength=num_graphs).clamp_min(1)
+                graph_feats = graph_feats / counts.to(graph_feats.dtype).unsqueeze(1)
+
+        extras = {k: v for k, v in out.items() if k not in {"node_feats", "graph_feats"}}
+        return BackboneOutputs(
+            node_feats=node_feats,
+            graph_feats=graph_feats,
+            extras=extras,
+        )
 
     @classmethod
     def get_model_name(cls):
@@ -177,7 +215,7 @@ class MACE(Model):
             **backbone_outputs,
         }
 
-    def get_readout(self) -> tuple[nn.Module, int, Optional[nn.Module]]:
+    def get_readout(self) -> tuple[nn.Module, int, nn.Module | None]:
         # This is the dimension of the backbone embeddings
         irreps_out = (
             self.readout_info["irreps_in_0"] + self.readout_info["irreps_in_1"]
@@ -205,36 +243,9 @@ CLOSE_ATOM_THRESHOLD = 1e-6
 NOISE_SCALE_ANGSTROM = 1e-6
 
 
-def _stress_to_voigt_6(stress: torch.Tensor | None) -> torch.Tensor | None:
-    if stress is None:
-        return None
-
-    if stress.shape[-1] == 6:
-        return stress
-
-    if stress.shape[-1] == 9:
-        stress = stress.reshape(-1, 3, 3)
-
-    if stress.shape[-2:] != (3, 3):
-        raise ValueError(
-            "Input stress tensor must have shape (..., 3, 3) or (..., 6). "
-            f"Got shape {stress.shape}"
-        )
-
-    batch_shape = stress.shape[:-2]
-    voigt = torch.empty((*batch_shape, 6), dtype=stress.dtype, device=stress.device)
-
-    voigt[..., 0] = stress[..., 0, 0]
-    voigt[..., 1] = stress[..., 1, 1]
-    voigt[..., 2] = stress[..., 2, 2]
-    voigt[..., 3] = (stress[..., 1, 2] + stress[..., 2, 1]) * 0.5
-    voigt[..., 4] = (stress[..., 2, 0] + stress[..., 0, 2]) * 0.5
-    voigt[..., 5] = (stress[..., 0, 1] + stress[..., 1, 0]) * 0.5
-
-    return voigt
-
-
 class MACEGraph:
+    triforces_graph_backend = "mace"
+
     """Build a PyG graph for MACE from ASE ``Atoms``.
 
     Parameters
@@ -406,8 +417,19 @@ class MACEGraph:
             )
 
         if hasattr(data, "stress"):
-            data.stress = _stress_to_voigt_6(data.stress)
+            data.stress = stress_to_voigt_6(data.stress)
+        src, dst = data.edge_index[0], data.edge_index[1]
+        edge_vec = data.positions[dst] - data.positions[src]
+        shifts = getattr(data, "shifts", None)
+        if shifts is not None:
+            edge_vec = edge_vec + torch.as_tensor(
+                shifts, device=edge_vec.device, dtype=edge_vec.dtype
+            )
+        data.edge_vec = edge_vec.to(dtype=torch.float32)
+        data.edge_dist = data.edge_vec.norm(dim=-1)
         data.atomic_numbers = torch.tensor(atoms.numbers, dtype=torch.long)
+        data.z = data.atomic_numbers
+        data.pos = data.positions
         data.natoms = len(atoms)
 
         return data
@@ -439,3 +461,6 @@ def mace_graph(
         Graph builder instance.
     """
     return MACEGraph(r_max=r_max, charges_key=charges_key)
+
+
+mace_graph.triforces_graph_backend = "mace"

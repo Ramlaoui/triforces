@@ -1,5 +1,6 @@
 _target_: triforces.data.pyg_collate
 _partial_: true
+contrastive: true
 graph:
   _target_: triforces.models.interaction.orb.orb_graph
   radius: 6.0

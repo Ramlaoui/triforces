@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import math
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -136,8 +135,6 @@ class CompositionStream(nn.Module):
         Maximum number of unique elements per graph.
     use_cls : bool, default=True
         Whether to use a CLS token.
-    normalize_stoichiometry : bool, default=False
-        Whether to normalize stoichiometry by GCD (legacy flag).
     stoichiometry_mode : str, optional
         Stoichiometry handling mode: ``"none"``, ``"gcd"``, or
         ``"fraction_embedding"``.
@@ -154,7 +151,6 @@ class CompositionStream(nn.Module):
         use_final_norm: bool = False,
         max_unique_elements: int = 100,
         use_cls: bool = True,
-        normalize_stoichiometry: bool = False,
         stoichiometry_mode: str | None = None,
     ):
         super().__init__()
@@ -163,12 +159,9 @@ class CompositionStream(nn.Module):
         self.max_unique_elements = max_unique_elements
         self.use_cls = use_cls
 
-        if stoichiometry_mode is not None:
-            self.stoichiometry_mode = stoichiometry_mode
-        elif normalize_stoichiometry:
-            self.stoichiometry_mode = "gcd"
-        else:
-            self.stoichiometry_mode = "none"
+        self.stoichiometry_mode = (
+            stoichiometry_mode if stoichiometry_mode is not None else "none"
+        )
 
         valid_modes = ("none", "gcd", "fraction_embedding")
         if self.stoichiometry_mode not in valid_modes:
@@ -268,7 +261,7 @@ class CompositionStream(nn.Module):
         self,
         batch: object,
         training: bool = False,
-        transform: Optional[object] = None,
+        transform: object | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if transform is not None:
             batch = transform(batch)

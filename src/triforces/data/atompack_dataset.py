@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Dict, List, Sequence, Union
 
 import numpy as np
 import torch
@@ -64,7 +64,7 @@ class AtompackDataset(Dataset[AtompackSample]):
         self._cum = np.cumsum([0] + self.file_lengths).tolist()
 
         # Worker-local connections.
-        self._worker_id: Optional[int] = None
+        self._worker_id: int | None = None
         self._dbs: Dict[Path, object] = {}
 
     def _expand_paths(

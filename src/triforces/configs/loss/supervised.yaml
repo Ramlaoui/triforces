@@ -1,0 +1,7 @@
+_target_: triforces.losses.SupervisedLoss
+energy_weight: 1.0
+forces_weight: 0.0
+stress_weight: 0.0
+energy_loss: mse
+forces_loss: mse
+stress_loss: mse

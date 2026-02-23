@@ -6,7 +6,7 @@ batched contrastive learning.
 """
 
 import random
-from typing import Optional, Union
+from typing import Union
 
 import numpy as np
 import torch
@@ -218,7 +218,7 @@ class FastSpatialCrop:
         fraction_range: tuple[float, float] = (0.2, 0.8),
         min_atoms: int = 10,
         mode: str = "khop",
-        max_hops: Optional[int] = None,
+        max_hops: int | None = None,
         spatial_cutoff: float = 6.0,
         remove_pbc: bool = True,
     ):
@@ -840,7 +840,6 @@ class RandomResizeCropASE:
         Atoms or (Atoms, ndarray)
             Cropped and resized structure, optionally with node indices
         """
-        from pymatgen.io.ase import AseAtomsAdaptor
 
         n_atoms = len(atoms)
 

@@ -1,12 +1,8 @@
-"""Learnable structural stream for materials science models.
-
-Self-contained copy of the EntalOracle power-spectrum structural stream.
-"""
+"""Learnable structural stream for materials science models."""
 
 from __future__ import annotations
 
 import math
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -281,8 +277,8 @@ class LearnablePowerSpectrumDescriptor(nn.Module):
 
         power = []
         idx = 0
-        for l in range(self.num_l):
-            n_coeffs = 2 * l + 1
+        for ell in range(self.num_l):
+            n_coeffs = 2 * ell + 1
             c_l = c_agg[:, :, idx : idx + n_coeffs]
             power_l = torch.einsum("nia,nja->nij", c_l, c_l)
             power.append(power_l.reshape(num_nodes, -1))
@@ -497,8 +493,8 @@ class StructuralStreamPowerSpectrum(nn.Module):
         edge_dist: torch.Tensor,
         batch_idx: torch.Tensor,
         B: int,
-        cell: Optional[torch.Tensor] = None,
-        num_atoms_per_graph: Optional[torch.Tensor] = None,
+        cell: torch.Tensor | None = None,
+        num_atoms_per_graph: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         device = pos.device
         N = pos.size(0)

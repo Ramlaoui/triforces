@@ -1,0 +1,22 @@
+_target_: triforces.models.heads.iBOTProjectionHead
+_partial_: true
+
+# NOTE:
+# - `do_ibot: true` requires providing `masked_indices` in the batch/outputs.
+# - The current codebase doesn't generate `masked_indices` in the dataset/collate,
+#   so this defaults to DINO-only behavior (`do_ibot: false`).
+
+projection_dim: 128
+patch_out_dim: ${.projection_dim}
+
+# Projector
+hidden_dim: 2048
+bottleneck_dim: 256
+use_bn: false
+use_gelu: true
+norm_last_layer: true
+
+# Behavior
+reduce: mean
+shared_head: true
+do_ibot: false

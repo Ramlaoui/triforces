@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence
+from typing import Sequence
 
 import numpy as np
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 from datasets import load_dataset
 from torch.utils.data import Dataset
+
+from triforces.utils.stress import stress_array_to_voigt_6
 
 from .ase_contrastive import AtomsSample
 
@@ -25,36 +27,10 @@ DEFAULT_METADATA_KEYS = (
 )
 
 
-def _stress_to_voigt(stress: np.ndarray) -> np.ndarray:
-    """Convert a 3x3 stress tensor to Voigt 6-component format.
-
-    Parameters
-    ----------
-    stress : np.ndarray
-        Stress tensor with shape ``(3, 3)``.
-
-    Returns
-    -------
-    np.ndarray
-        Voigt-6 vector with shape ``(6,)``.
-    """
-    return np.array(
-        [
-            stress[0, 0],
-            stress[1, 1],
-            stress[2, 2],
-            stress[1, 2],
-            stress[0, 2],
-            stress[0, 1],
-        ],
-        dtype=np.float32,
-    )
-
-
 def lemat_item_to_ase(
     item: dict,
     *,
-    add_targets: Optional[Sequence[str]] = None,
+    add_targets: Sequence[str] | None = None,
     add_metadata: bool = True,
 ) -> Atoms:
     """Convert a LeMat-Bulk item to an ASE Atoms object.
@@ -113,7 +89,7 @@ def lemat_item_to_ase(
             stress_tensor = np.asarray(raw_stress, dtype=np.float32)
             if stress_tensor.shape != (3, 3):
                 stress_tensor = stress_tensor.reshape(3, 3)
-            stress_voigt = _stress_to_voigt(stress_tensor)
+            stress_voigt = stress_array_to_voigt_6(stress_tensor)
             atoms.info["stress"] = stress_voigt
             atoms.info["stress_tensor"] = stress_tensor
 
@@ -155,9 +131,9 @@ class LeMatBulkDataset(Dataset[AtomsSample]):
         name: str = DEFAULT_CONFIG,
         split: str = DEFAULT_SPLIT,
         dataset_name: str = DEFAULT_DATASET_NAME,
-        cache_dir: Optional[str] = None,
-        max_samples: Optional[int] = None,
-        add_targets: Optional[Sequence[str]] = None,
+        cache_dir: str | None = None,
+        max_samples: int | None = None,
+        add_targets: Sequence[str] | None = None,
         add_metadata: bool = True,
     ):
         self.dataset = load_dataset(

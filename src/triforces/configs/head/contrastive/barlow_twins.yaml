@@ -1,0 +1,21 @@
+_target_: triforces.models.heads.BarlowTwinsProjectionHead
+_partial_: true
+
+# Feature dims
+projection_dim: 128
+
+# Behavior
+compute_node_level: true
+compute_graph_level: true
+reduce: mean
+
+# Projector
+# NOTE: The head's Python defaults are very large (Barlow Twins paper style).
+# Keep the config reasonable by default; override if you want the 8192-d setup.
+hidden_dims:
+  - ${model.backbone.output_dim}
+  - ${model.backbone.output_dim}
+  - ${model.backbone.output_dim}
+use_bn: true
+dropout: 0.0
+separate_projectors: false

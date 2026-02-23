@@ -4,8 +4,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
 import torch.nn as nn
@@ -32,34 +31,6 @@ def _pred_items(preds: Any):
     if isinstance(attrs, dict):
         return attrs.items()
     return []
-
-
-def _compute_pair_indices(pair_id: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    pair_id = torch.as_tensor(pair_id)
-    if pair_id.ndim != 1:
-        raise ValueError(f"Expected pair_id as 1D tensor, got {tuple(pair_id.shape)}")
-
-    buckets: dict[int, list[int]] = defaultdict(list)
-    for i, pid in enumerate(pair_id.tolist()):
-        buckets[int(pid)].append(i)
-
-    idx1_list: list[int] = []
-    idx2_list: list[int] = []
-    for indices in buckets.values():
-        if len(indices) < 2:
-            continue
-        idx1_list.append(indices[0])
-        idx2_list.append(indices[1])
-
-    device = pair_id.device
-    if not idx1_list:
-        empty = torch.empty((0,), dtype=torch.long, device=device)
-        return empty, empty
-
-    return (
-        torch.tensor(idx1_list, dtype=torch.long, device=device),
-        torch.tensor(idx2_list, dtype=torch.long, device=device),
-    )
 
 
 def is_dist_avail_and_initialized() -> bool:
@@ -181,7 +152,7 @@ class SlicedGaussianRegularizer(nn.Module):
         t_max: float = 3.0,
         n_quadrature_points: int = 17,
         reduction: str = "mean",
-        clip_value: Optional[float] = None,
+        clip_value: float | None = None,
     ) -> None:
         super().__init__()
         self.n_slices = n_slices
@@ -195,8 +166,8 @@ class SlicedGaussianRegularizer(nn.Module):
         )
 
         self.register_buffer("global_step", torch.zeros((), dtype=torch.long))
-        self._generator: Optional[torch.Generator] = None
-        self._generator_device: Optional[torch.device] = None
+        self._generator: torch.Generator | None = None
+        self._generator_device: torch.device | None = None
 
     def _get_generator(self, device: torch.device, seed: int) -> torch.Generator:
         if self._generator is None or self._generator_device != device:
@@ -294,16 +265,16 @@ class LeJEPALoss(BaseLoss):
         self,
         embedding_key: str = "graph_projections",
         node_embedding_key: str = "node_projections",
-        prediction_weight: Optional[float] = None,
-        sigreg_weight: Optional[float] = None,
-        lambda_sigreg: Optional[float] = None,
+        prediction_weight: float | None = None,
+        sigreg_weight: float | None = None,
+        lambda_sigreg: float | None = None,
         sigreg_univariate: str = "EppsPulley",
         sigreg_num_points: int = 17,
         sigreg_num_slices: int = 1024,
         sigreg_t_max: float = 3.0,
         lambda_node: float = 0.5,
         lambda_graph: float = 0.5,
-        clip_value: Optional[float] = None,
+        clip_value: float | None = None,
         detach_target: bool = False,
         **kwargs,
     ) -> None:
@@ -374,7 +345,7 @@ class LeJEPALoss(BaseLoss):
 
     def _select_projection_group(
         self, preds: Any, keys: List[str]
-    ) -> Tuple[Optional[str], List[Tuple[str, torch.Tensor]]]:
+    ) -> Tuple[str | None, List[Tuple[str, torch.Tensor]]]:
         for key in keys:
             found = self._find_stream_projections(preds, key)
             if found:
@@ -424,13 +395,12 @@ class LeJEPALoss(BaseLoss):
     def _forward_with_pairs(
         self, data: Any, preds: Any
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
-        if not hasattr(data, "pair_id"):
-            raise ValueError("Data must contain 'pair_id' field")
-
         pair_idx1 = getattr(data, "pair_idx1", None)
         pair_idx2 = getattr(data, "pair_idx2", None)
         if pair_idx1 is None or pair_idx2 is None:
-            pair_idx1, pair_idx2 = _compute_pair_indices(data.pair_id)
+            raise ValueError(
+                "LeJEPALoss requires `pair_idx1` and `pair_idx2` from collate."
+            )
 
         if pair_idx1.numel() == 0:
             device = getattr(data, "batch", torch.tensor([], dtype=torch.long)).device
@@ -458,9 +428,15 @@ class LeJEPALoss(BaseLoss):
             if not graph_projections:
                 raise ValueError("No graph embeddings found in preds.")
 
+            graph_idx_cache: dict[torch.device, tuple[torch.Tensor, torch.Tensor]] = {}
             for key_name, graph_proj in graph_projections:
-                idx1 = pair_idx1.to(device=graph_proj.device)
-                idx2 = pair_idx2.to(device=graph_proj.device)
+                device = graph_proj.device
+                if device not in graph_idx_cache:
+                    graph_idx_cache[device] = (
+                        pair_idx1.to(device=device),
+                        pair_idx2.to(device=device),
+                    )
+                idx1, idx2 = graph_idx_cache[device]
 
                 graph_emb1 = graph_proj[idx1]
                 graph_emb2 = graph_proj[idx2]
@@ -509,9 +485,15 @@ class LeJEPALoss(BaseLoss):
                 if not node_projections:
                     raise ValueError("No node embeddings found in preds.")
 
+                node_idx_cache: dict[torch.device, tuple[torch.Tensor, torch.Tensor]] = {}
                 for key_name, node_proj in node_projections:
-                    idx1 = node_idx1.to(device=node_proj.device)
-                    idx2 = node_idx2.to(device=node_proj.device)
+                    device = node_proj.device
+                    if device not in node_idx_cache:
+                        node_idx_cache[device] = (
+                            node_idx1.to(device=device),
+                            node_idx2.to(device=device),
+                        )
+                    idx1, idx2 = node_idx_cache[device]
 
                     node_emb1 = node_proj[idx1]
                     node_emb2 = node_proj[idx2]
@@ -557,15 +539,15 @@ class LeJEPALoss(BaseLoss):
 
     def forward(
         self,
-        data: Optional[Any] = None,
-        preds: Optional[Any] = None,
+        data: Any | None = None,
+        preds: Any | None = None,
         step: int = 0,
-        embeddings1: Optional[torch.Tensor] = None,
-        embeddings2: Optional[torch.Tensor] = None,
-        node_embeddings1: Optional[torch.Tensor] = None,
-        node_embeddings2: Optional[torch.Tensor] = None,
-        graph_embeddings1: Optional[torch.Tensor] = None,
-        graph_embeddings2: Optional[torch.Tensor] = None,
+        embeddings1: torch.Tensor | None = None,
+        embeddings2: torch.Tensor | None = None,
+        node_embeddings1: torch.Tensor | None = None,
+        node_embeddings2: torch.Tensor | None = None,
+        graph_embeddings1: torch.Tensor | None = None,
+        graph_embeddings2: torch.Tensor | None = None,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         metrics: Dict[str, float] = {}
 

@@ -1,0 +1,15 @@
+_target_: triforces.models.heads.BYOLCombinedHead
+_partial_: true
+
+# Feature dims
+projection_dim: 128
+
+# MLPs
+hidden_dim: 2048
+predictor_hidden_dim: 2048
+use_bn: true
+
+# Behavior
+compute_node_level: true
+compute_graph_level: true
+reduce: mean

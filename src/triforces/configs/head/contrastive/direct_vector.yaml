@@ -1,0 +1,5 @@
+_target_: triforces.models.heads.DirectVectorHead
+_partial_: true
+
+output_dim: 3
+output_key: noise_displacement

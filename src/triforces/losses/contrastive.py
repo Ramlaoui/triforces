@@ -190,8 +190,6 @@ class ContrastiveLoss(BaseLoss):
         if self.similarity_metric == "cosine":
             graph_embeddings = F.normalize(graph_embeddings, dim=-1, p=2)
 
-        n_graphs = len(graph_embeddings)
-
         # Compute similarity matrix
         sim_matrix = (
             torch.mm(graph_embeddings, graph_embeddings.t()) / self.temperature_graph

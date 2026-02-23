@@ -1,16 +1,18 @@
 """Loss functions for contrastive and self-supervised training."""
 
+from .barlow_twins import BarlowTwinsLoss
 from .base import BaseLoss
 from .contrastive import ContrastiveLoss
-from .barlow_twins import BarlowTwinsLoss
+from .dino import KoLeoLoss, iBOTLoss
+from .ibot import iBOTPatchLoss
 from .lejepa import LeJEPALoss
 from .reconstruction import ReconstructionLoss
-from .ibot import iBOTPatchLoss
-from .dino import iBOTLoss, KoLeoLoss
+from .supervised import SupervisedLoss
 
 __all__ = [
     "BaseLoss",
     "ContrastiveLoss",
+    "SupervisedLoss",
     "BarlowTwinsLoss",
     "LeJEPALoss",
     "ReconstructionLoss",

@@ -31,10 +31,11 @@ dependencies = [
     "neptune-scale>=0.16.0",
     "neptune-fetcher>=0.16.0",
     "seaborn>=0.13.2",
+    "nvidia-ml-py>=13.590.48",
 ]
 
 [project.scripts]
-triforces = "triforces.cli.train_contrastive:main"
+triforces = "triforces.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,14 @@
+_target_: triforces.models.triforces.TriForcesModel
+interaction:
+  _target_: triforces.models.interaction.mace.MACE
+  model_type: small
+  disable_forces: true
+  disable_stress: true
+interaction_dim: null
+interaction_name: mace
+composition_dim: ${.output_dim}
+structural_dim: ${.output_dim}
+cutoff: 6.5
+num_elements: 118
+use_final_mlp: true
+output_dim: 128

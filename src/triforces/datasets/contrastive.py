@@ -1,7 +1,7 @@
 """Contrastive datasets for generating augmented views."""
 
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from torch.utils.data import Dataset
 
@@ -15,6 +15,9 @@ class ContrastiveDataset(Dataset):
         Base dataset providing samples.
     augmentations : dict[str, Any], optional
         Mapping of augmentation names to callables.
+    augmentation_probabilities : dict[str, float], optional
+        Optional per-augmentation application probabilities in ``[0, 1]``.
+        Defaults to ``1.0`` per augmentation.
     n_augmentation_views : int, default=2
         Number of augmented views per sample.
     n_opposite_views : int, default=0
@@ -35,7 +38,8 @@ class ContrastiveDataset(Dataset):
     def __init__(
         self,
         dataset: Dataset,
-        augmentations: Optional[Dict[str, Any]] = None,
+        augmentations: Dict[str, Any] | None = None,
+        augmentation_probabilities: Dict[str, float] | None = None,
         n_augmentation_views: int = 2,
         n_opposite_views: int = 0,
         include_original: bool = False,
@@ -44,11 +48,15 @@ class ContrastiveDataset(Dataset):
     ):
         self.dataset = dataset
         self.augmentations = augmentations or {}
+        self.augmentation_probabilities = {
+            str(k): float(v) for k, v in (augmentation_probabilities or {}).items()
+        }
         self.n_augmentation_views = n_augmentation_views
         self.n_opposite_views = n_opposite_views
         self.include_original = include_original
         self.apply_augmentations_prob = apply_augmentations_prob
         self.return_pairs = bool(return_pairs)
+        self._validate_augmentation_config()
 
         # Calculate total views per sample
         self.total_views = n_augmentation_views + n_opposite_views
@@ -97,73 +105,55 @@ class ContrastiveDataset(Dataset):
                 return sample
             current_view += 1
 
-        if random.random() <= self.apply_augmentations_prob and self.augmentations:
+        should_apply_augmentations = random.random() <= self.apply_augmentations_prob
+        if self.augmentations and should_apply_augmentations:
             if view_idx < current_view + self.n_augmentation_views:
-                sample = self._apply_random_augmentation(sample)
+                sample = self._apply_augmentations(sample)
             else:
                 sample = self._apply_opposite_augmentation(sample)
 
         sample.pair_id = pair_id
         return sample
 
-    def _apply_random_augmentation(self, sample: Any) -> Any:
-        """Apply a random augmentation to the sample.
+    def _validate_augmentation_config(self) -> None:
+        if not 0.0 <= float(self.apply_augmentations_prob) <= 1.0:
+            raise ValueError("apply_augmentations_prob must be in [0, 1].")
 
-        Parameters
-        ----------
-        sample : Any
-            Sample to augment.
+        for name, prob in self.augmentation_probabilities.items():
+            if name not in self.augmentations:
+                raise ValueError(
+                    "augmentation_probabilities contains unknown augmentation "
+                    f"name '{name}'."
+                )
+            if not 0.0 <= prob <= 1.0:
+                raise ValueError(
+                    f"augmentation probability for '{name}' must be in [0, 1]."
+                )
 
-        Returns
-        -------
-        Any
-            Augmented sample.
-        """
+    def _apply_to_sample(self, sample: Any, augmentation: Any) -> Any:
+        """Apply one augmentation callable to a sample."""
+        if hasattr(sample, "atoms"):
+            sample.atoms = augmentation(sample.atoms)
+            return sample
+        if hasattr(sample, "structure"):
+            sample.structure = augmentation(sample.structure)
+            return sample
+        return augmentation(sample)
+
+    def _apply_augmentations(self, sample: Any) -> Any:
+        """Apply augmentations according to per-augmentation probabilities."""
         if not self.augmentations:
             return sample
 
-        # Select random augmentation
-        aug_name = random.choice(list(self.augmentations.keys()))
-        augmentation = self.augmentations[aug_name]
-
-        # Apply to the underlying structure (e.g., ASE Atoms)
-        if hasattr(sample, "atoms"):
-            sample.atoms = augmentation(sample.atoms)
-        elif hasattr(sample, "structure"):
-            sample.structure = augmentation(sample.structure)
-        else:
-            # Assume sample itself is the structure
-            sample = augmentation(sample)
-
+        for name in self.augmentations.keys():
+            prob = float(self.augmentation_probabilities.get(name, 1.0))
+            if random.random() < prob:
+                sample = self._apply_to_sample(sample, self.augmentations[name])
         return sample
 
     def _apply_opposite_augmentation(self, sample: Any) -> Any:
-        return self._apply_random_augmentation(sample)
+        return self._apply_augmentations(sample)
 
 
-class SimpleContrastiveDataset(ContrastiveDataset):
-    """Simplified dataset that stores (data, pair_id) tuples.
-
-    Parameters
-    ----------
-    data : list[Any]
-        Samples to serve.
-    pair_ids : list[int], optional
-        Pair IDs aligned with ``data``. Defaults to ``range(len(data))``.
-    """
-
-    def __init__(self, data: List[Any], pair_ids: Optional[List[int]] = None):
-        self.data = data
-        self.pair_ids = pair_ids or list(range(len(data)))
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def __getitem__(self, idx: int) -> Any:
-        sample = self.data[idx]
-
-        # Add pair_id if it doesn't exist
-        if not hasattr(sample, "pair_id"):
-            sample.pair_id = self.pair_ids[idx]
-
-        return sample
+class AugmentationDataset(ContrastiveDataset):
+    """Canonical name for the dataset that generates augmented views."""

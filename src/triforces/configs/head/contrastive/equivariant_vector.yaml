@@ -1,0 +1,7 @@
+_target_: triforces.models.heads.EquivariantVectorHead
+_partial_: true
+
+output_dim: 3
+equivariant_key: node_feats_equivariant
+output_key: noise_displacement
+use_tensor_product: true

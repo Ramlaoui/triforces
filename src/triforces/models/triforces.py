@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import torch
 import torch.nn as nn
@@ -9,10 +9,14 @@ from .composition_stream import CompositionStream
 from .outputs import BackboneOutputs
 from .structural_stream import StructuralStreamPowerSpectrum
 
-try:
-    from torch_geometric.data import Batch
-except Exception:  # pragma: no cover
-    Batch = None
+
+def _get_first_attr(batch: object, names: tuple[str, ...], default: Any = None) -> Any:
+    for name in names:
+        if hasattr(batch, name):
+            value = getattr(batch, name)
+            if value is not None:
+                return value
+    return default
 
 
 def _mean_pool(
@@ -31,8 +35,9 @@ class TriForcesModel(nn.Module):
     ----------
     interaction : nn.Module
         Interaction backbone returning node and graph features.
-    interaction_dim : int
-        Dimension of interaction features.
+    interaction_dim : int, optional
+        Dimension of interaction features. If ``None``, inferred from the
+        interaction backbone when possible.
     interaction_name : str, default="interaction"
         Name for the interaction stream.
     enable_composition : bool, default=True
@@ -55,8 +60,6 @@ class TriForcesModel(nn.Module):
         If True, override dropout to zero.
     cutoff : float, default=6.0
         Cutoff radius for structural stream.
-    max_neighbors : int, optional
-        Maximum number of neighbors for interaction backbone.
     num_elements : int, default=100
         Number of elements for composition embeddings.
     num_radial : int, default=8
@@ -87,7 +90,7 @@ class TriForcesModel(nn.Module):
         self,
         *,
         interaction: nn.Module,
-        interaction_dim: int,
+        interaction_dim: int | None = None,
         interaction_name: str = "interaction",
         enable_composition: bool = True,
         enable_structural: bool = True,
@@ -99,7 +102,6 @@ class TriForcesModel(nn.Module):
         dropout: float = 0.1,
         force_no_dropout: bool = True,
         cutoff: float = 6.0,
-        max_neighbors: int | None = None,
         num_elements: int = 100,
         num_radial: int = 8,
         num_radial_out: int = 8,
@@ -119,7 +121,11 @@ class TriForcesModel(nn.Module):
             dropout = 0.0
 
         self.interaction = interaction
-        self.interaction_dim = int(interaction_dim)
+        self.interaction_dim = int(
+            interaction_dim
+            if interaction_dim is not None
+            else self._infer_interaction_dim(interaction)
+        )
         self.interaction_name = interaction_name
 
         self.enable_composition = enable_composition
@@ -127,7 +133,6 @@ class TriForcesModel(nn.Module):
         self.fusion_mode = fusion_mode
         self.use_final_mlp = use_final_mlp
         self.cutoff = cutoff
-        self.max_neighbors = max_neighbors
         self.use_lattice = use_lattice
         self.disable_lattice = disable_lattice
         self.stoichiometry_mode = stoichiometry_mode
@@ -215,68 +220,150 @@ class TriForcesModel(nn.Module):
             self.final_mlp = None
             self.output_dim = self.fused_dim
 
+    def _infer_interaction_dim(self, interaction: nn.Module) -> int:
+        for attr in ("output_dim", "embed_dim", "hidden_dim"):
+            value = getattr(interaction, attr, None)
+            if isinstance(value, int) and value > 0:
+                return int(value)
+
+        get_info = getattr(interaction, "get_head_build_info", None)
+        if callable(get_info):
+            info = get_info()
+            value = info.get("output_dim") if isinstance(info, dict) else None
+            if isinstance(value, int) and value > 0:
+                return int(value)
+
+        get_readout = getattr(interaction, "get_readout", None)
+        if callable(get_readout):
+            try:
+                readout = get_readout()
+            except Exception:
+                readout = None
+            if (
+                isinstance(readout, tuple)
+                and len(readout) >= 2
+                and readout[1] is not None
+            ):
+                dim = readout[1]
+                if isinstance(dim, int) and dim > 0:
+                    return int(dim)
+                dim_attr: Any = getattr(dim, "dim", None)
+                if isinstance(dim_attr, int) and dim_attr > 0:
+                    return int(dim_attr)
+
+        raise ValueError(
+            "Could not infer interaction_dim from interaction backbone. "
+            "Provide `interaction_dim` explicitly."
+        )
+
+    def _resolve_structural_edges(
+        self,
+        *,
+        batch: object,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        edge_index = _get_first_attr(batch, ("edge_index",))
+        if edge_index is None:
+            raise ValueError("Batch must provide `edge_index` for structural stream.")
+
+        edge_vec = _get_first_attr(batch, ("edge_vec", "edge_distance_vec", "vectors"))
+        if edge_vec is None:
+            pos = _get_first_attr(batch, ("pos", "positions"))
+            if pos is None:
+                raise ValueError(
+                    "Batch must provide `edge_vec`/`edge_distance_vec`/`vectors` "
+                    "or (`pos` and `edge_index`) for structural stream."
+                )
+            edge_index_t = torch.as_tensor(edge_index, device=device, dtype=torch.long)
+            src, dst = edge_index_t[0], edge_index_t[1]
+            pos_t = torch.as_tensor(pos, device=device, dtype=dtype)
+            edge_vec = pos_t[src] - pos_t[dst]
+
+            cell_offsets = _get_first_attr(batch, ("cell_offsets",))
+            cell = _get_first_attr(batch, ("cell", "lattice"))
+            batch_idx = _get_first_attr(batch, ("batch",))
+            cell_offsets_t = (
+                torch.as_tensor(cell_offsets, device=device, dtype=dtype)
+                if cell_offsets is not None
+                else None
+            )
+            if (
+                cell_offsets_t is not None
+                and cell is not None
+                and batch_idx is not None
+                and cell_offsets_t.numel() > 0
+            ):
+                cell_t = torch.as_tensor(cell, device=device, dtype=dtype).view(-1, 3, 3)
+                edge_batch = torch.as_tensor(batch_idx, device=device, dtype=torch.long)[
+                    src
+                ]
+                edge_cell = cell_t[edge_batch]
+                offset_vec = torch.einsum(
+                    "ei,eij->ej",
+                    cell_offsets_t,
+                    edge_cell,
+                )
+                edge_vec = edge_vec + offset_vec
+
+        edge_dist = _get_first_attr(batch, ("edge_dist", "edge_distance", "distances"))
+        if edge_dist is None:
+            edge_dist = torch.as_tensor(edge_vec, device=device, dtype=dtype).norm(dim=-1)
+
+        return (
+            torch.as_tensor(edge_index, device=device, dtype=torch.long),
+            torch.as_tensor(edge_vec, device=device, dtype=dtype),
+            torch.as_tensor(edge_dist, device=device, dtype=dtype).reshape(-1),
+        )
+
     def _run_interaction(
         self,
         *,
         batch: object,
-        batch_idx: torch.Tensor,
-        num_graphs: int,
         training: bool,
-        transform: Optional[object],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        transform: object | None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]:
         out = self.interaction(batch, training=training, transform=transform)
-
-        if isinstance(out, BackboneOutputs):
-            return out.node_feats, out.graph_feats
-        if isinstance(out, tuple) and len(out) == 2:
-            return out[0], out[1]
-        if isinstance(out, dict):
-            node = out.get("node_feats")
-            if node is None:
-                node = out.get("node_features")
-            graph = out.get("graph_feats")
-            if graph is None:
-                graph = out.get("graph_features")
-            if node is None:
-                raise ValueError("Interaction backbone dict missing node features.")
-            if graph is None:
-                graph = _mean_pool(node, batch_idx, num_graphs)
-            return node, graph
-        if torch.is_tensor(out):
-            node = out
-            graph = _mean_pool(node, batch_idx, num_graphs)
-            return node, graph
-        raise ValueError("Unsupported interaction backbone output type.")
+        if not isinstance(out, BackboneOutputs):
+            raise TypeError("Interaction backbone must return BackboneOutputs.")
+        interaction_extras = dict(out.extras) if isinstance(out.extras, dict) else {}
+        return out.node_feats, out.graph_feats, interaction_extras
 
     def forward(
         self,
         batch: object,
         training: bool = False,
-        transform: Optional[object] = None,
+        transform: object | None = None,
     ) -> BackboneOutputs:
-        z = getattr(batch, "z", None)
-        pos = getattr(batch, "pos", None)
+        z = _get_first_attr(batch, ("z", "atomic_numbers"))
+        pos = _get_first_attr(batch, ("pos", "positions"))
         batch_idx = getattr(batch, "batch", None)
 
         if z is None or pos is None or batch_idx is None:
             raise ValueError("Batch must provide z, pos, and batch attributes.")
+
+        # Keep backward compatibility for components that expect canonical names.
+        if getattr(batch, "z", None) is None:
+            setattr(batch, "z", z)
+        if getattr(batch, "pos", None) is None:
+            setattr(batch, "pos", pos)
 
         num_graphs = getattr(batch, "num_graphs", None)
         if num_graphs is None:
             num_graphs = int(batch_idx.max().item()) + 1 if batch_idx.numel() else 0
         num_graphs = int(num_graphs)
 
-        cell = getattr(batch, "cell", None)
+        cell = _get_first_attr(batch, ("cell", "lattice"))
 
         N = z.size(0)
         device = z.device
 
-        interaction_node, interaction_graph = self._run_interaction(
+        # If a graph batch is already provided, transforms are already applied upstream.
+        model_transform = None if hasattr(batch, "edge_index") else transform
+        interaction_node, interaction_graph, interaction_extras = self._run_interaction(
             batch=batch,
-            batch_idx=batch_idx,
-            num_graphs=num_graphs,
             training=training,
-            transform=transform,
+            transform=model_transform,
         )
 
         stream_node_feats: Dict[str, torch.Tensor] = {
@@ -285,24 +372,27 @@ class TriForcesModel(nn.Module):
         stream_graph_feats: Dict[str, torch.Tensor] = {
             self.interaction_name: interaction_graph
         }
+        # Provide a stable alias for downstream code/configs.
+        if self.interaction_name != "interaction":
+            stream_node_feats["interaction"] = interaction_node
+            stream_graph_feats["interaction"] = interaction_graph
         node_outputs = [interaction_node]
 
         if self.composition_stream is not None:
             comp_node, comp_graph = self.composition_stream(
                 batch,
                 training=training,
-                transform=transform,
+                transform=model_transform,
             )
             stream_node_feats["composition"] = comp_node
             stream_graph_feats["composition"] = comp_graph
             node_outputs.append(comp_node)
 
         if self.structural_stream is not None:
-            edge_index = radius_graph(
-                pos=pos,
-                batch=batch_idx,
-                r=self.cutoff,
-                max_num_neighbors=self.max_neighbors,
+            edge_index, edge_vec, edge_dist = self._resolve_structural_edges(
+                batch=batch,
+                device=device,
+                dtype=pos.dtype,
             )
             if edge_index.numel() == 0:
                 struct_node = torch.zeros(
@@ -310,18 +400,23 @@ class TriForcesModel(nn.Module):
                 )
                 struct_graph = _mean_pool(struct_node, batch_idx, num_graphs)
             else:
-                src, dst = edge_index[0], edge_index[1]
-                edge_vec = pos[dst] - pos[src]
-                edge_dist = edge_vec.norm(dim=-1)
-
                 num_atoms_per_graph = None
+                if hasattr(batch, "num_atoms_per_graph"):
+                    num_atoms_per_graph = torch.as_tensor(
+                        getattr(batch, "num_atoms_per_graph"),
+                        device=device,
+                        dtype=torch.long,
+                    )
                 if cell is not None:
-                    num_atoms_per_graph = torch.zeros(
-                        num_graphs, device=device, dtype=torch.long
-                    )
-                    num_atoms_per_graph.scatter_add_(
-                        0, batch_idx, torch.ones(N, device=device, dtype=torch.long)
-                    )
+                    if num_atoms_per_graph is None:
+                        num_atoms_per_graph = torch.zeros(
+                            num_graphs, device=device, dtype=torch.long
+                        )
+                        num_atoms_per_graph.scatter_add_(
+                            0,
+                            batch_idx,
+                            torch.ones(N, device=device, dtype=torch.long),
+                        )
 
                 struct_node, struct_graph = self.structural_stream(
                     pos=pos,
@@ -358,11 +453,22 @@ class TriForcesModel(nn.Module):
 
         graph_feats = _mean_pool(node_feats, batch_idx, num_graphs)
 
+        extras: Dict[str, Any] = dict(interaction_extras)
+        extras["stream_node_feats"] = stream_node_feats
+        extras["stream_graph_feats"] = stream_graph_feats
         return BackboneOutputs(
             node_feats=node_feats,
             graph_feats=graph_feats,
-            extras={
-                "stream_node_feats": stream_node_feats,
-                "stream_graph_feats": stream_graph_feats,
-            },
+            extras=extras,
         )
+
+    def get_head_build_info(self) -> dict[str, object]:
+        stream_dims: dict[str, int] = {"interaction": int(self.interaction_dim)}
+        if self.composition_stream is not None and self.composition_dim > 0:
+            stream_dims["composition"] = int(self.composition_dim)
+        if self.structural_stream is not None and self.structural_dim > 0:
+            stream_dims["structural"] = int(self.structural_dim)
+        return {
+            "output_dim": int(self.output_dim),
+            "stream_dims": stream_dims,
+        }

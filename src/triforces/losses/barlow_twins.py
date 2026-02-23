@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple, Optional
+from typing import Any, Dict, Tuple
 
 import torch
 import torch.nn as nn
@@ -45,8 +45,6 @@ class BarlowTwinsLoss(nn.Module):
         Weight for graph-level loss.
     use_batch_norm : bool, default=True
         Whether to use batch normalization before computing correlations.
-    use_node_correspondence : bool, default=False
-        Whether to use node correspondence when matching nodes between views.
     auto_scale_lambda : bool, default=True
         Whether to scale ``lambda_param`` with the projection dimension.
     reference_dim : int, default=8192
@@ -64,7 +62,6 @@ class BarlowTwinsLoss(nn.Module):
         lambda_node: float = 0.5,
         lambda_graph: float = 0.5,
         use_batch_norm: bool = True,
-        use_node_correspondence: bool = False,
         auto_scale_lambda: bool = True,
         reference_dim: int = 8192,
     ):
@@ -74,7 +71,6 @@ class BarlowTwinsLoss(nn.Module):
         self.lambda_node = lambda_node
         self.lambda_graph = lambda_graph
         self.use_batch_norm = use_batch_norm
-        self.use_node_correspondence = use_node_correspondence
         self.auto_scale_lambda = auto_scale_lambda
         self.reference_dim = reference_dim
 
@@ -109,172 +105,38 @@ class BarlowTwinsLoss(nn.Module):
         -----
         Uses precomputed pair indices when available to avoid CUDA synchronization.
         """
-        if not hasattr(data, "pair_id"):
-            raise ValueError("Data must contain 'pair_id' field")
+        if not hasattr(data, "pair_idx1") or not hasattr(data, "pair_idx2"):
+            raise ValueError(
+                "BarlowTwinsLoss requires `pair_idx1` and `pair_idx2` from collate."
+            )
 
         device = getattr(data, "batch", torch.tensor([], dtype=torch.long)).device
 
         node_projections = _get_pred_value(preds, "node_projections")
         graph_projections = _get_pred_value(preds, "graph_projections")
-
-        # FAST PATH: Use precomputed pair indices (no CUDA sync!)
-        if hasattr(data, "pair_idx1") and hasattr(data, "pair_idx2"):
-            idx1 = data.pair_idx1.to(device)
-            idx2 = data.pair_idx2.to(device)
-
-            # Check if we have valid pairs without syncing
-            if idx1.numel() == 0:
-                return torch.tensor(0.0, device=device, requires_grad=True), {
-                    "skipped": "no_valid_pairs"
-                }
-
-            kwargs = {}
-
-            # Graph-level: Simple vectorized indexing (no loops, no sync)
-            if graph_projections is not None:
-                kwargs["graph_embeddings1"] = graph_projections[idx1]
-                kwargs["graph_embeddings2"] = graph_projections[idx2]
-
-            # Node-level: Use precomputed node indices (ULTRA FAST!)
-            if (
-                node_projections is not None
-                and hasattr(data, "node_pair_idx1")
-                and hasattr(data, "node_pair_idx2")
-            ):
-                node_idx1 = data.node_pair_idx1.to(device)
-                node_idx2 = data.node_pair_idx2.to(device)
-
-                if node_idx1.numel() > 0:
-                    # Single vectorized indexing - no loop, no CUDA sync!
-                    kwargs["node_embeddings1"] = node_projections[node_idx1]
-                    kwargs["node_embeddings2"] = node_projections[node_idx2]
-            elif node_projections is not None and hasattr(data, "batch"):
-                # FALLBACK: Old node-level path (slower, with loop)
-                node_emb1_list, node_emb2_list = [], []
-
-                # This loop is over valid pairs (already filtered), not raw data
-                # Much faster than before, but still some indexing
-                for i in range(len(idx1)):
-                    graph_idx1 = idx1[i]
-                    graph_idx2 = idx2[i]
-
-                    node_mask1 = data.batch == graph_idx1
-                    node_mask2 = data.batch == graph_idx2
-
-                    # Extract embeddings
-                    node_emb1 = node_projections[node_mask1]
-                    node_emb2 = node_projections[node_mask2]
-
-                    # Handle node correspondence for augmentations that change node count
-                    if self.use_node_correspondence and hasattr(
-                        data, "node_correspondence"
-                    ):
-                        corr = data.node_correspondence[node_mask1]
-                        valid_mask1 = corr >= 0
-
-                        if valid_mask1.any():
-                            mask2_local_to_global = torch.where(node_mask2)[0]
-                            corr_valid = corr[valid_mask1]
-
-                            # Vectorized matching
-                            matches_mask = corr_valid.unsqueeze(
-                                1
-                            ) == mask2_local_to_global.unsqueeze(0)
-                            has_match = matches_mask.any(dim=1)
-
-                            if has_match.any():
-                                match_positions = matches_mask.long().argmax(dim=1)
-                                valid_indices = torch.where(valid_mask1)[0]
-                                view1_indices = valid_indices[has_match]
-                                view2_indices = match_positions[has_match]
-
-                                node_emb1_list.append(node_emb1[view1_indices])
-                                node_emb2_list.append(node_emb2[view2_indices])
-                    else:
-                        # No correspondence tracking - require same node count
-                        if node_emb1.shape[0] == node_emb2.shape[0]:
-                            node_emb1_list.append(node_emb1)
-                            node_emb2_list.append(node_emb2)
-
-                if node_emb1_list:
-                    kwargs["node_embeddings1"] = torch.cat(node_emb1_list, dim=0)
-                    kwargs["node_embeddings2"] = torch.cat(node_emb2_list, dim=0)
-
-            return self.forward(**kwargs)
-
-        # FALLBACK: Old slow path for backward compatibility
-        # This triggers CUDA synchronization and should be avoided
-        pair_ids = data.pair_id
-        unique_pairs = torch.unique(pair_ids)
-
-        node_emb1_list, node_emb2_list = [], []
-        graph_emb1_list, graph_emb2_list = [], []
-
-        for pair_id in unique_pairs:
-            mask = pair_ids == pair_id
-            indices = torch.where(mask)[0]
-
-            if len(indices) != 2:
-                continue
-
-            idx1, idx2 = indices[0], indices[1]
-
-            if node_projections is not None and hasattr(data, "batch"):
-                node_mask1 = data.batch == idx1
-                node_mask2 = data.batch == idx2
-
-                if node_mask1.any() and node_mask2.any():
-                    node_emb1 = node_projections[node_mask1]
-                    node_emb2 = node_projections[node_mask2]
-
-                    if self.use_node_correspondence and hasattr(
-                        data, "node_correspondence"
-                    ):
-                        corr = data.node_correspondence[node_mask1]
-                        valid_mask1 = corr >= 0
-
-                        if valid_mask1.any():
-                            node2_global_indices = torch.where(node_mask2)[0]
-                            valid_corr = corr[valid_mask1]
-                            mask2_local_to_global = torch.where(node_mask2)[0]
-
-                            matches = []
-                            view1_indices = []
-                            for i, (is_valid, corr_idx) in enumerate(
-                                zip(valid_mask1, corr)
-                            ):
-                                if is_valid:
-                                    local_idx2 = (
-                                        mask2_local_to_global == corr_idx
-                                    ).nonzero(as_tuple=True)[0]
-                                    if len(local_idx2) > 0:
-                                        view1_indices.append(i)
-                                        matches.append(local_idx2[0].item())
-
-                            if len(matches) > 0:
-                                view1_indices = torch.tensor(
-                                    view1_indices, device=node_emb1.device
-                                )
-                                matches = torch.tensor(matches, device=node_emb2.device)
-                                node_emb1_list.append(node_emb1[view1_indices])
-                                node_emb2_list.append(node_emb2[matches])
-                    else:
-                        if node_emb1.shape[0] == node_emb2.shape[0]:
-                            node_emb1_list.append(node_emb1)
-                            node_emb2_list.append(node_emb2)
-
-            if graph_projections is not None:
-                graph_emb1_list.append(graph_projections[idx1 : idx1 + 1])
-                graph_emb2_list.append(graph_projections[idx2 : idx2 + 1])
+        idx1 = data.pair_idx1.to(device)
+        idx2 = data.pair_idx2.to(device)
+        if idx1.numel() == 0:
+            return torch.tensor(0.0, device=device, requires_grad=True), {
+                "skipped": "no_valid_pairs"
+            }
 
         kwargs = {}
-        if node_emb1_list:
-            kwargs["node_embeddings1"] = torch.cat(node_emb1_list, dim=0)
-            kwargs["node_embeddings2"] = torch.cat(node_emb2_list, dim=0)
+        if graph_projections is not None:
+            kwargs["graph_embeddings1"] = graph_projections[idx1]
+            kwargs["graph_embeddings2"] = graph_projections[idx2]
 
-        if graph_emb1_list:
-            kwargs["graph_embeddings1"] = torch.cat(graph_emb1_list, dim=0)
-            kwargs["graph_embeddings2"] = torch.cat(graph_emb2_list, dim=0)
+        if self.lambda_node > 0 and node_projections is not None:
+            if not hasattr(data, "node_pair_idx1") or not hasattr(data, "node_pair_idx2"):
+                raise ValueError(
+                    "BarlowTwinsLoss node loss requires `node_pair_idx1` and "
+                    "`node_pair_idx2` from collate."
+                )
+            node_idx1 = data.node_pair_idx1.to(device)
+            node_idx2 = data.node_pair_idx2.to(device)
+            if node_idx1.numel() > 0:
+                kwargs["node_embeddings1"] = node_projections[node_idx1]
+                kwargs["node_embeddings2"] = node_projections[node_idx2]
 
         if not kwargs:
             return torch.tensor(0.0, device=device, requires_grad=True), {
@@ -417,16 +279,16 @@ class BarlowTwinsLoss(nn.Module):
 
     def forward(
         self,
-        data: Optional[Any] = None,
-        preds: Optional[Any] = None,
+        data: Any | None = None,
+        preds: Any | None = None,
         step: int = 0,
         # direct tensor inputs
-        z1: Optional[torch.Tensor] = None,
-        z2: Optional[torch.Tensor] = None,
-        node_embeddings1: Optional[torch.Tensor] = None,
-        node_embeddings2: Optional[torch.Tensor] = None,
-        graph_embeddings1: Optional[torch.Tensor] = None,
-        graph_embeddings2: Optional[torch.Tensor] = None,
+        z1: torch.Tensor | None = None,
+        z2: torch.Tensor | None = None,
+        node_embeddings1: torch.Tensor | None = None,
+        node_embeddings2: torch.Tensor | None = None,
+        graph_embeddings1: torch.Tensor | None = None,
+        graph_embeddings2: torch.Tensor | None = None,
     ) -> Tuple[torch.Tensor, Dict]:
         """Compute Barlow Twins loss from data or direct embeddings.
 

@@ -1,5 +1,3 @@
-"""Minimal ``Atoms`` to PyG graph builder without entaloracle."""
-
 from __future__ import annotations
 
 import numpy as np
@@ -50,8 +48,19 @@ class SimpleGraph:
             max_num_neighbors=self.max_num_neighbors,
             loop=self.loop,
         )
+        src, dst = edge_index[0], edge_index[1]
+        edge_vec = pos[dst] - pos[src]
+        edge_dist = edge_vec.norm(dim=-1)
 
-        data = Data(z=z, atomic_numbers=z, pos=pos, edge_index=edge_index, **kwargs)
+        data = Data(
+            z=z,
+            atomic_numbers=z,
+            pos=pos,
+            edge_index=edge_index,
+            edge_vec=edge_vec,
+            edge_dist=edge_dist,
+            **kwargs,
+        )
 
         cell = getattr(atoms, "cell", None)
         if cell is not None and hasattr(cell, "array"):

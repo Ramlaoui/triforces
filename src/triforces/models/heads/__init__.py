@@ -1,22 +1,30 @@
-"""
-Projection heads for contrastive learning.
-"""
+"""Projection heads for contrastive learning."""
 
-from .simclr import ProjectionHead
 from .barlow_twins import BarlowTwinsProjectionHead
+from .byol import BYOLCombinedHead, BYOLPredictorHead, BYOLProjectionHead
+from .classification import ClassificationHead
+from .direct import DirectVectorHead
+from .ibot import iBOTCombinedHead, iBOTProjectionHead
+from .simclr import ProjectionHead
 from .split_barlow_twins import SplitBarlowTwinsProjectionHead
-from .multi_stream_barlow_twins import MultiStreamBarlowTwinsProjectionHead
-from .byol import BYOLProjectionHead, BYOLPredictorHead, BYOLCombinedHead
-from .ibot import iBOTProjectionHead, iBOTCombinedHead
+from .supervised import (
+    DirectSupervisedHead,
+    EnergyConservingHead,
+    EquivariantVectorHead,
+)
 
 __all__ = [
+    "ClassificationHead",
     "ProjectionHead",
     "BarlowTwinsProjectionHead",
     "SplitBarlowTwinsProjectionHead",
-    "MultiStreamBarlowTwinsProjectionHead",
     "BYOLProjectionHead",
     "BYOLPredictorHead",
     "BYOLCombinedHead",
+    "DirectVectorHead",
     "iBOTProjectionHead",
     "iBOTCombinedHead",
+    "DirectSupervisedHead",
+    "EnergyConservingHead",
+    "EquivariantVectorHead",
 ]

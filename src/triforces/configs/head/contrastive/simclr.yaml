@@ -1,0 +1,19 @@
+_target_: triforces.models.heads.ProjectionHead
+_partial_: true
+
+# Feature dims
+graph_projection_dim: 128
+node_projection_dim: ${.graph_projection_dim}
+
+# Behavior
+compute_node_level: true
+compute_graph_level: true
+reduce: mean
+
+# MLP
+projection_hidden_dims:
+  - ${model.backbone.output_dim}
+activation: relu
+use_batch_norm: true
+dropout: 0.0
+normalize_output: false

@@ -1,0 +1,15 @@
+_target_: triforces.models.triforces.TriForcesModel
+interaction:
+  _target_: triforces.models.interaction.orb.Orb
+  model_type: orb-v3-direct
+  disable_forces: true
+  disable_stress: true
+  compute_displacement: false
+interaction_dim: null
+interaction_name: orb
+composition_dim: ${.output_dim}
+structural_dim: ${.output_dim}
+cutoff: 6.0
+num_elements: 118
+use_final_mlp: true
+output_dim: 128

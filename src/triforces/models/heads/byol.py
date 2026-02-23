@@ -1,19 +1,35 @@
 """BYOL projection and predictor heads for self-supervised learning."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import torch
 import torch.nn as nn
 
 from ..outputs import BackboneOutputs
+from .simclr import ProjectionHead
 
 
-class BYOLProjectionHead(nn.Module):
-    """
-    BYOL projection head (shared by online and target networks).
+class BYOLProjectionHead(ProjectionHead):
+    """Projection head with BYOL defaults.
 
-    Projects backbone features to a lower-dimensional space where
-    contrastive learning happens.
+    Parameters
+    ----------
+    input_dim : int
+        Input feature dimension.
+    projection_dim : int, default=256
+        Output projection dimension.
+    hidden_dim : int, default=4096
+        Hidden dimension for the MLP.
+    compute_node_level : bool, default=True
+        Whether to compute node-level projections.
+    compute_graph_level : bool, default=True
+        Whether to compute graph-level projections.
+    use_bn : bool, default=True
+        Whether to use batch normalization.
+    reduce : str, default="mean"
+        Reduction method for graph pooling.
+    **kwargs : Any
+        Additional unused arguments.
     """
 
     def __init__(
@@ -26,122 +42,66 @@ class BYOLProjectionHead(nn.Module):
         use_bn: bool = True,
         reduce: str = "mean",
         **kwargs,
-    ):
-        super().__init__()
+    ) -> None:
+        self.projection_dim = int(projection_dim)
+        self.hidden_dim = int(hidden_dim)
+        self.use_bn = bool(use_bn)
+        super().__init__(
+            input_dim=input_dim,
+            node_projection_dim=projection_dim if compute_node_level else None,
+            graph_projection_dim=projection_dim if compute_graph_level else None,
+            compute_node_level=compute_node_level,
+            compute_graph_level=compute_graph_level,
+            reduce=reduce,
+            normalize_output=False,
+            dropout=0.0,
+            activation="relu",
+            use_batch_norm=use_bn,
+            projection_hidden_dims=[hidden_dim],
+            **kwargs,
+        )
 
-        self.input_dim = input_dim
-        self.projection_dim = projection_dim
-        self.hidden_dim = hidden_dim
-        self.compute_node_level = compute_node_level
-        self.compute_graph_level = compute_graph_level
-        self.reduce = reduce
-        self.use_bn = use_bn
-
-        # Build projectors (2-layer MLP as in BYOL paper)
-        if self.compute_node_level:
-            self.node_projector = self._build_projector(
-                input_dim, hidden_dim, projection_dim, use_bn=use_bn
-            )
-        else:
-            self.node_projector = None
-
-        if self.compute_graph_level:
-            self.graph_projector = self._build_projector(
-                input_dim, hidden_dim, projection_dim, use_bn=use_bn
-            )
-        else:
-            self.graph_projector = None
-
-        self._initialize_weights()
-
-    def _initialize_weights(self):
-        """Initialize weights."""
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight, gain=1.0)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.BatchNorm1d):
-                if m.affine:
-                    nn.init.ones_(m.weight)
-                    nn.init.zeros_(m.bias)
-
-    def _build_projector(
-        self,
-        input_dim: int,
-        hidden_dim: int,
-        output_dim: int,
-        use_bn: bool = True,
-    ) -> nn.Module:
-        """Build 2-layer projection MLP as in BYOL paper."""
-        layers = []
-
-        layers.append(nn.Linear(input_dim, hidden_dim, bias=not use_bn))
-        if use_bn:
-            layers.append(nn.BatchNorm1d(hidden_dim))
-        layers.append(nn.ReLU(inplace=True))
-
-        layers.append(nn.Linear(hidden_dim, output_dim, bias=False))
-
-        return nn.Sequential(*layers)
-
-    def forward(
-        self,
-        backbone_outputs: BackboneOutputs,
-        batch: Any,
-        outputs: Optional[Dict[str, torch.Tensor]] = None,
-        training: bool = False,
-        transform: Any = None,
-        **kwargs: Any,
-    ) -> Dict[str, torch.Tensor]:
-        node_features = backbone_outputs.node_feats
-        graph_features = backbone_outputs.graph_feats
-
-        batch_idx = getattr(batch, "batch", None)
-        num_graphs = getattr(batch, "num_graphs", None)
-        if num_graphs is None and batch_idx is not None and batch_idx.numel():
-            num_graphs = int(batch_idx.max().item()) + 1
-
-        out: Dict[str, torch.Tensor] = {}
-        out["node_feats"] = node_features
-
-        if self.node_projector is not None:
-            out["node_projections"] = self.node_projector(node_features)
-
-        if graph_features is None and batch_idx is not None:
-            graph_features = torch.zeros(
-                (num_graphs, node_features.size(1)),
-                device=node_features.device,
-                dtype=node_features.dtype,
-            )
-            graph_features.index_add_(0, batch_idx, node_features)
-
-            if self.reduce == "mean":
-                count = torch.bincount(batch_idx, minlength=num_graphs).float()
-                count = torch.clamp(count, min=1)
-                graph_features = graph_features / count.unsqueeze(1)
-
-        if graph_features is not None:
-            out["graph_features"] = graph_features
-            if self.graph_projector is not None:
-                out["graph_projections"] = self.graph_projector(graph_features)
-
-        return out
+    @classmethod
+    def build_from_backbone_info(
+        cls, backbone_info: Dict[str, Any], **kwargs: Any
+    ) -> "BYOLProjectionHead":
+        kwargs = dict(kwargs)
+        if kwargs.get("input_dim") is None:
+            output_dim = backbone_info.get("output_dim")
+            if output_dim is None:
+                raise ValueError(
+                    "BYOLProjectionHead requires `input_dim` or backbone_info['output_dim']."
+                )
+            kwargs["input_dim"] = int(output_dim)
+        return cls(**kwargs)
 
 
 class BYOLPredictorHead(nn.Module):
-    """
-    BYOL predictor head (only in online network).
+    """BYOL predictor head used only in the online network.
 
-    Predicts target network projections from online network projections.
-    This asymmetry is crucial for preventing collapse in BYOL.
+    Parameters
+    ----------
+    input_dim : int
+        Input feature dimension.
+    hidden_dim : int, default=4096
+        Hidden dimension for the MLP.
+    output_dim : int, optional
+        Output feature dimension. Defaults to ``input_dim``.
+    compute_node_level : bool, default=True
+        Whether to compute node-level predictions.
+    compute_graph_level : bool, default=True
+        Whether to compute graph-level predictions.
+    use_bn : bool, default=True
+        Whether to use batch normalization.
+    **kwargs : Any
+        Additional unused arguments.
     """
 
     def __init__(
         self,
         input_dim: int,
         hidden_dim: int = 4096,
-        output_dim: Optional[int] = None,
+        output_dim: int | None = None,
         compute_node_level: bool = True,
         compute_graph_level: bool = True,
         use_bn: bool = True,
@@ -176,6 +136,26 @@ class BYOLPredictorHead(nn.Module):
 
         self._initialize_weights()
 
+    @classmethod
+    def build_from_backbone_info(
+        cls, backbone_info: Dict[str, Any], **kwargs: Any
+    ) -> "BYOLPredictorHead":
+        kwargs = dict(kwargs)
+        if kwargs.get("input_dim") is None:
+            candidate = backbone_info.get("projection_dim")
+            if candidate is None:
+                candidate = backbone_info.get("output_dim")
+            if candidate is None:
+                raise ValueError(
+                    "BYOLPredictorHead requires `input_dim` or "
+                    "backbone_info['projection_dim']/['output_dim']."
+                )
+            kwargs["input_dim"] = int(candidate)
+        return cls(**kwargs)
+
+    def get_head_build_info(self) -> Dict[str, Any]:
+        return {"projection_dim": int(self.output_dim)}
+
     def _initialize_weights(self):
         """Initialize weights."""
         for m in self.modules():
@@ -195,7 +175,24 @@ class BYOLPredictorHead(nn.Module):
         output_dim: int,
         use_bn: bool = True,
     ) -> nn.Module:
-        """Build 2-layer predictor MLP as in BYOL paper."""
+        """Build a 2-layer predictor MLP as in BYOL.
+
+        Parameters
+        ----------
+        input_dim : int
+            Input feature dimension.
+        hidden_dim : int
+            Hidden layer dimension.
+        output_dim : int
+            Output feature dimension.
+        use_bn : bool, default=True
+            Whether to use batch normalization.
+
+        Returns
+        -------
+        nn.Module
+            Predictor MLP.
+        """
         layers = []
 
         # First layer
@@ -212,23 +209,32 @@ class BYOLPredictorHead(nn.Module):
         self,
         backbone_outputs: BackboneOutputs,
         batch: Any,
-        outputs: Optional[Dict[str, torch.Tensor]] = None,
+        outputs: Dict[str, torch.Tensor] | None = None,
         training: bool = False,
         transform: Any = None,
         **kwargs: Any,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Apply predictor to projections.
+        """Apply the predictor to existing projections.
 
         Parameters
         ----------
-        projections : Dict[str, torch.Tensor]
-            Dictionary with 'node_projections' and/or 'graph_projections'
+        backbone_outputs : BackboneOutputs
+            Backbone outputs (unused; included for interface consistency).
+        batch : Any
+            Batch object (unused).
+        outputs : dict[str, torch.Tensor], optional
+            Dictionary containing ``node_projections`` and/or ``graph_projections``.
+        training : bool, default=False
+            Training mode flag.
+        transform : Any, optional
+            Optional transform (unused).
+        **kwargs : Any
+            Additional arguments.
 
         Returns
         -------
-        Dict[str, torch.Tensor]
-            Dictionary with 'node_predictions' and/or 'graph_predictions'
+        dict[str, torch.Tensor]
+            Dictionary with ``node_predictions`` and/or ``graph_predictions``.
         """
         if outputs is None:
             raise ValueError("BYOLPredictorHead requires outputs with projections.")
@@ -250,11 +256,28 @@ class BYOLPredictorHead(nn.Module):
 
 
 class BYOLCombinedHead(nn.Module):
-    """
-    Combined BYOL head with projection and prediction.
+    """Combined BYOL head with projection and prediction.
 
-    This combines the projection and predictor heads for the online network.
-    The target network only uses the projection head.
+    Parameters
+    ----------
+    input_dim : int
+        Input feature dimension.
+    projection_dim : int, default=256
+        Output projection dimension.
+    hidden_dim : int, default=4096
+        Hidden dimension for projection MLP.
+    predictor_hidden_dim : int, optional
+        Hidden dimension for predictor MLP. Defaults to ``hidden_dim``.
+    compute_node_level : bool, default=True
+        Whether to compute node-level projections/predictions.
+    compute_graph_level : bool, default=True
+        Whether to compute graph-level projections/predictions.
+    use_bn : bool, default=True
+        Whether to use batch normalization.
+    reduce : str, default="mean"
+        Reduction method for graph pooling.
+    **kwargs : Any
+        Additional unused arguments.
     """
 
     def __init__(
@@ -262,7 +285,7 @@ class BYOLCombinedHead(nn.Module):
         input_dim: int,
         projection_dim: int = 256,
         hidden_dim: int = 4096,
-        predictor_hidden_dim: Optional[int] = None,
+        predictor_hidden_dim: int | None = None,
         compute_node_level: bool = True,
         compute_graph_level: bool = True,
         use_bn: bool = True,
@@ -293,33 +316,53 @@ class BYOLCombinedHead(nn.Module):
             use_bn=use_bn,
         )
 
+    @classmethod
+    def build_from_backbone_info(
+        cls, backbone_info: Dict[str, Any], **kwargs: Any
+    ) -> "BYOLCombinedHead":
+        kwargs = dict(kwargs)
+        if kwargs.get("input_dim") is None:
+            output_dim = backbone_info.get("output_dim")
+            if output_dim is None:
+                raise ValueError(
+                    "BYOLCombinedHead requires `input_dim` or backbone_info['output_dim']."
+                )
+            kwargs["input_dim"] = int(output_dim)
+        return cls(**kwargs)
+
+    def get_head_build_info(self) -> Dict[str, Any]:
+        return {"projection_dim": int(self.projection_head.projection_dim)}
+
     def forward(
         self,
         backbone_outputs: BackboneOutputs,
         batch: Any,
-        outputs: Optional[Dict[str, torch.Tensor]] = None,
+        outputs: Dict[str, torch.Tensor] | None = None,
         training: bool = False,
         transform: Any = None,
         **kwargs: Any,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Forward pass through projection and predictor.
+        """Forward pass through projection and predictor heads.
 
         Parameters
         ----------
-        node_features : torch.Tensor
-            Input node features
-        batch : Optional[torch.Tensor]
-            Batch indices for graph pooling
-        num_graphs : Optional[int]
-            Number of graphs in batch
-        return_predictions : bool
-            Whether to return predictions (set False for target network)
+        backbone_outputs : BackboneOutputs
+            Backbone outputs with node and graph features.
+        batch : Any
+            Batch object.
+        outputs : dict[str, torch.Tensor], optional
+            Existing outputs dict.
+        training : bool, default=False
+            Training mode flag.
+        transform : Any, optional
+            Optional transform (unused).
+        **kwargs : Any
+            Additional arguments. Use ``return_predictions=False`` for target network.
 
         Returns
         -------
-        Dict[str, torch.Tensor]
-            Projections and optionally predictions
+        dict[str, torch.Tensor]
+            Projections and, optionally, predictions.
         """
         return_predictions = kwargs.get("return_predictions", True)
 

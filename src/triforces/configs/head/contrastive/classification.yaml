@@ -1,0 +1,8 @@
+_target_: triforces.models.heads.ClassificationHead
+_partial_: true
+num_classes: 119
+hidden_dims: [512, 512]
+output_key: atom_type_logits
+activation: silu
+use_batch_norm: false
+dropout: 0.0
