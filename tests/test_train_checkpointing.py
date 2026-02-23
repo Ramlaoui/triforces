@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf
@@ -9,7 +10,13 @@ from torch.utils.data import Dataset
 from torch_geometric.data import Data
 
 from triforces.models.outputs import BackboneOutputs
-from triforces.train import _load_checkpoint_weights, run
+from triforces.train import (
+    _load_checkpoint_weights,
+    _model_cfg_with_backbone_from_checkpoint,
+    _save_checkpoint,
+    _validate_resume_data_pipeline_consistency,
+    run,
+)
 
 
 class _ToyAdapter(nn.Module):
@@ -54,7 +61,9 @@ class _ToyGraphDataset(Dataset[Data]):
         return self._items[int(idx)]
 
 
-def _base_train_cfg(checkpoint_dir: Path, *, epochs: int, resume_from: str | None = None):
+def _base_train_cfg(
+    checkpoint_dir: Path, *, epochs: int, resume_from: str | None = None
+):
     return OmegaConf.create(
         {
             "device": "cpu",
@@ -111,6 +120,7 @@ def _base_train_cfg(checkpoint_dir: Path, *, epochs: int, resume_from: str | Non
                     "dir": str(checkpoint_dir),
                     "save_every_epochs": 1,
                     "save_last": True,
+                    "save_last_every_steps": 1,
                     "save_best": True,
                     "keep_last_n": 1,
                     "monitor": "loss",
@@ -120,6 +130,7 @@ def _base_train_cfg(checkpoint_dir: Path, *, epochs: int, resume_from: str | Non
                     "init_from": None,
                     "init_mode": "full",
                     "init_strict": False,
+                    "init_use_backbone_config": False,
                 },
             },
             "logger": {"enabled": False},
@@ -147,6 +158,25 @@ def test_load_checkpoint_weights_backbone_only_keeps_head() -> None:
         assert torch.allclose(value, head_before[key])
 
 
+def test_save_checkpoint_creates_parent_dir(tmp_path: Path) -> None:
+    model = _ToyAdapter()
+    optim = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    loss_fn = nn.MSELoss()
+    ckpt_path = tmp_path / "missing" / "nested" / "last.pt"
+
+    _save_checkpoint(
+        path=ckpt_path,
+        model=model,
+        optim=optim,
+        loss_fn=loss_fn,
+        epoch=0,
+        global_step=1,
+        best_metric=None,
+    )
+
+    assert ckpt_path.exists()
+
+
 def test_run_saves_and_resumes_checkpoints(tmp_path: Path) -> None:
     ckpt_dir = tmp_path / "checkpoints"
 
@@ -162,6 +192,10 @@ def test_run_saves_and_resumes_checkpoints(tmp_path: Path) -> None:
 
     first_payload = torch.load(first_last, map_location="cpu", weights_only=False)
     assert int(first_payload["epoch"]) == 0
+    assert int(first_payload["checkpoint_schema_version"]) == 2
+    assert isinstance(first_payload["config_resolved"], dict)
+    assert isinstance(first_payload["model_config_resolved"], dict)
+    assert isinstance(first_payload["loss_config_resolved"], dict)
     first_step = int(first_payload["global_step"])
     assert first_step > 0
     assert "loss_checkpoint_state" in first_payload
@@ -182,3 +216,260 @@ def test_run_saves_and_resumes_checkpoints(tmp_path: Path) -> None:
     # keep_last_n=1 should keep only the most recent epoch checkpoint.
     assert not (ckpt_dir / "epoch_0001.pt").exists()
     assert (ckpt_dir / "epoch_0002.pt").exists()
+
+
+def test_run_saves_last_checkpoint_each_step(tmp_path: Path, monkeypatch) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    cfg = _base_train_cfg(ckpt_dir, epochs=1)
+
+    import triforces.train as train_module
+
+    saved_last = {"count": 0}
+    real_save_checkpoint = train_module._save_checkpoint
+
+    def _spy_save_checkpoint(
+        *,
+        path: Path,
+        model: nn.Module,
+        optim: torch.optim.Optimizer,
+        loss_fn: nn.Module,
+        epoch: int,
+        global_step: int,
+        best_metric: float | None,
+        extra_payload: dict[str, object] | None = None,
+    ) -> None:
+        if path.name == "last.pt":
+            saved_last["count"] += 1
+        real_save_checkpoint(
+            path=path,
+            model=model,
+            optim=optim,
+            loss_fn=loss_fn,
+            epoch=epoch,
+            global_step=global_step,
+            best_metric=best_metric,
+            extra_payload=extra_payload,
+        )
+
+    monkeypatch.setattr(train_module, "_save_checkpoint", _spy_save_checkpoint)
+
+    assert run(cfg) == 0
+
+    # Dataset has 4 samples with batch_size=2, so we expect at least 2 step saves.
+    assert saved_last["count"] >= 2
+
+
+def test_run_saves_last_checkpoint_on_configured_step_interval(
+    tmp_path: Path, monkeypatch
+) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    cfg = _base_train_cfg(ckpt_dir, epochs=1)
+    cfg.train.checkpoint.save_last_every_steps = 2
+
+    import triforces.train as train_module
+
+    saved_last = {"count": 0}
+    real_save_checkpoint = train_module._save_checkpoint
+
+    def _spy_save_checkpoint(
+        *,
+        path: Path,
+        model: nn.Module,
+        optim: torch.optim.Optimizer,
+        loss_fn: nn.Module,
+        epoch: int,
+        global_step: int,
+        best_metric: float | None,
+        extra_payload: dict[str, object] | None = None,
+    ) -> None:
+        if path.name == "last.pt":
+            saved_last["count"] += 1
+        real_save_checkpoint(
+            path=path,
+            model=model,
+            optim=optim,
+            loss_fn=loss_fn,
+            epoch=epoch,
+            global_step=global_step,
+            best_metric=best_metric,
+            extra_payload=extra_payload,
+        )
+
+    monkeypatch.setattr(train_module, "_save_checkpoint", _spy_save_checkpoint)
+
+    assert run(cfg) == 0
+
+    # With 2 train steps and save_last_every_steps=2, we save once in-step (step 2).
+    # Epoch-end save is skipped because the last step already wrote last.pt.
+    assert saved_last["count"] == 1
+
+
+def test_resume_requires_checkpoint_config_metadata(tmp_path: Path) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    legacy_path = ckpt_dir / "legacy_last.pt"
+
+    model = _ToyAdapter()
+    optim = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    loss_fn = nn.MSELoss()
+    _save_checkpoint(
+        path=legacy_path,
+        model=model,
+        optim=optim,
+        loss_fn=loss_fn,
+        epoch=0,
+        global_step=1,
+        best_metric=None,
+    )
+
+    cfg = _base_train_cfg(ckpt_dir, epochs=2, resume_from=str(legacy_path))
+    with pytest.raises(RuntimeError, match="config_resolved"):
+        run(cfg)
+
+
+def test_run_rejects_resume_and_init_conflict(tmp_path: Path) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    cfg = _base_train_cfg(ckpt_dir, epochs=1)
+    cfg.train.checkpoint.resume_from = "/tmp/resume.pt"
+    cfg.train.checkpoint.init_from = "/tmp/init.pt"
+
+    with pytest.raises(ValueError, match="set only one"):
+        run(cfg)
+
+
+def test_run_rejects_invalid_init_mode(tmp_path: Path) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    cfg = _base_train_cfg(ckpt_dir, epochs=1)
+    cfg.train.checkpoint.init_mode = "bad_mode"
+
+    with pytest.raises(ValueError, match="init_mode"):
+        run(cfg)
+
+
+def test_run_rejects_invalid_save_last_every_steps(tmp_path: Path) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    cfg = _base_train_cfg(ckpt_dir, epochs=1)
+    cfg.train.checkpoint.save_last_every_steps = 0
+
+    with pytest.raises(ValueError, match="save_last_every_steps"):
+        run(cfg)
+
+
+def test_run_rejects_resume_path_directory(tmp_path: Path) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    bad_resume = tmp_path / "not_a_file"
+    bad_resume.mkdir(parents=True)
+    cfg = _base_train_cfg(ckpt_dir, epochs=1)
+    cfg.train.checkpoint.resume_from = str(bad_resume)
+
+    with pytest.raises(ValueError, match="must point to a checkpoint file"):
+        run(cfg)
+
+
+def test_run_rejects_missing_collate_target(tmp_path: Path) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    cfg = _base_train_cfg(ckpt_dir, epochs=1)
+    cfg.collate = {"contrastive": False}
+
+    with pytest.raises(ValueError, match="missing `_target_`"):
+        run(cfg)
+
+
+def test_run_rejects_init_use_backbone_config_without_init_from(tmp_path: Path) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    cfg = _base_train_cfg(ckpt_dir, epochs=1)
+    cfg.train.checkpoint.init_use_backbone_config = True
+    cfg.train.checkpoint.init_mode = "backbone"
+
+    with pytest.raises(ValueError, match="requires `train.checkpoint.init_from`"):
+        run(cfg)
+
+
+def test_run_rejects_init_use_backbone_config_without_backbone_mode(
+    tmp_path: Path,
+) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    init_path = tmp_path / "dummy.pt"
+    torch.save({"model_state_dict": {}}, init_path)
+    cfg = _base_train_cfg(ckpt_dir, epochs=1)
+    cfg.train.checkpoint.init_from = str(init_path)
+    cfg.train.checkpoint.init_use_backbone_config = True
+    cfg.train.checkpoint.init_mode = "full"
+
+    with pytest.raises(
+        ValueError, match="requires `train.checkpoint.init_mode=backbone`"
+    ):
+        run(cfg)
+
+
+def test_model_cfg_with_backbone_from_checkpoint_replaces_backbone_only() -> None:
+    model_cfg = OmegaConf.create(
+        {
+            "_target_": "triforces.models.adapter_model.AdapterModel",
+            "backbone": {"output_dim": 128, "interaction_name": "orb"},
+            "heads": {
+                "proj": {
+                    "_target_": "dummy",
+                    "hidden_dims": ["${model.backbone.output_dim}"],
+                }
+            },
+        }
+    )
+    checkpoint_payload = {
+        "model_config_resolved": {
+            "backbone": {"output_dim": 512, "interaction_name": "orb"}
+        }
+    }
+    updated_cfg = _model_cfg_with_backbone_from_checkpoint(
+        model_cfg=model_cfg,
+        checkpoint_payload=checkpoint_payload,
+        checkpoint_path=Path("/tmp/checkpoint.pt"),
+    )
+
+    assert updated_cfg.backbone.output_dim == 512
+    assert updated_cfg.heads.proj._target_ == "dummy"
+    assert OmegaConf.to_container(updated_cfg.heads.proj.hidden_dims, resolve=True) == [
+        512
+    ]
+
+
+def test_validate_resume_data_pipeline_consistency_rejects_mismatch() -> None:
+    launch_cfg = OmegaConf.create(
+        {
+            "dataset": {"_target_": "pkg.DatasetA", "root": "/a"},
+            "collate": {"_target_": "pkg.collate_a", "contrastive": False},
+        }
+    )
+    checkpoint_cfg = OmegaConf.create(
+        {
+            "dataset": {"_target_": "pkg.DatasetA", "root": "/b"},
+            "collate": {"_target_": "pkg.collate_a", "contrastive": False},
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="data pipeline mismatch"):
+        _validate_resume_data_pipeline_consistency(
+            launch_cfg=launch_cfg,
+            checkpoint_cfg=checkpoint_cfg,
+            allow_override=False,
+        )
+
+
+def test_validate_resume_data_pipeline_consistency_allows_override() -> None:
+    launch_cfg = OmegaConf.create(
+        {
+            "dataset": {"_target_": "pkg.DatasetA", "root": "/a"},
+            "collate": {"_target_": "pkg.collate_a", "contrastive": False},
+        }
+    )
+    checkpoint_cfg = OmegaConf.create(
+        {
+            "dataset": {"_target_": "pkg.DatasetA", "root": "/b"},
+            "collate": {"_target_": "pkg.collate_a", "contrastive": False},
+        }
+    )
+
+    _validate_resume_data_pipeline_consistency(
+        launch_cfg=launch_cfg,
+        checkpoint_cfg=checkpoint_cfg,
+        allow_override=True,
+    )

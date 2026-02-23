@@ -1,0 +1,44 @@
+reference_energy:
+  mean: 0.7048568725585938
+  n_samples: 5335299
+  std: 8.75705337524414
+  reference_energies: src/config/data/transforms/references/lematbulk_ls.yaml
+standard_normalizer:
+  forces:
+    M2:
+    - 0.0
+    - 0.0
+    - 0.0
+    mean:
+    - 0.0
+    - 0.0
+    - 0.0
+    n_samples: 1.0
+    std:
+    - ${transform_info.reference_energy.std}
+    - ${transform_info.reference_energy.std}
+    - ${transform_info.reference_energy.std}
+  n_fit_steps: null
+  stress:
+    M2:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    mean:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    n_samples: 1.0
+    std:
+    - ${transform_info.reference_energy.std}
+    - ${transform_info.reference_energy.std}
+    - ${transform_info.reference_energy.std}
+    - ${transform_info.reference_energy.std}
+    - ${transform_info.reference_energy.std}
+    - ${transform_info.reference_energy.std}

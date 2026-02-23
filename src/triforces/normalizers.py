@@ -51,9 +51,9 @@ class EnergyReferenceNormalizer:
             dtype=torch.long,
             device=energy.device,
         ).reshape(-1)
-        batch_idx = torch.as_tensor(batch, dtype=torch.long, device=energy.device).reshape(
-            -1
-        )
+        batch_idx = torch.as_tensor(
+            batch, dtype=torch.long, device=energy.device
+        ).reshape(-1)
         if z.shape != batch_idx.shape:
             raise ValueError(
                 "`atomic_numbers` and `batch` must have the same shape, got "

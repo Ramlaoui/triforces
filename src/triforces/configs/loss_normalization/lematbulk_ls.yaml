@@ -1,0 +1,11 @@
+energy_references: ${_normalization_references}
+standardization:
+  energy:
+    mean: ${_normalization_transform_info.energy.mean}
+    std: ${_normalization_transform_info.energy.std}
+  forces:
+    mean: ${_normalization_transform_info.forces.mean}
+    std: ${_normalization_transform_info.forces.std}
+  stress:
+    mean: ${_normalization_transform_info.stress.mean}
+    std: ${_normalization_transform_info.stress.std}

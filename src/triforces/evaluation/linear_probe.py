@@ -187,7 +187,11 @@ def _stratified_split_indices(
 
 
 def _fit_ridge(
-    x_train: np.ndarray, y_train: np.ndarray, *, alpha: float, fit_intercept: bool = True
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    *,
+    alpha: float,
+    fit_intercept: bool = True,
 ) -> np.ndarray:
     x_aug = x_train
     if fit_intercept:
@@ -300,7 +304,9 @@ class LinearProbeEvaluator:
                     density[g] = 1.66053906660 * mass_amu / v
 
                     radii = covalent_radii[z_g]
-                    sphere_volume = float(np.sum((4.0 / 3.0) * np.pi * np.power(radii, 3)))
+                    sphere_volume = float(
+                        np.sum((4.0 / 3.0) * np.pi * np.power(radii, 3))
+                    )
                     packing_fraction[g] = sphere_volume / v
 
         volume_per_atom = volume / np.clip(targets["n_atoms"], a_min=1.0, a_max=None)
@@ -313,14 +319,20 @@ class LinearProbeEvaluator:
         mean_nn = np.full((num_graphs,), np.nan, dtype=np.float64)
         edge_index = getattr(batch, "edge_index", None)
         edge_dist = getattr(batch, "edge_dist", None)
-        if isinstance(edge_index, torch.Tensor) and edge_index.ndim == 2 and edge_index.shape[0] == 2:
+        if (
+            isinstance(edge_index, torch.Tensor)
+            and edge_index.ndim == 2
+            and edge_index.shape[0] == 2
+        ):
             src = edge_index[0].detach().cpu().to(torch.long)
             if isinstance(edge_dist, torch.Tensor):
                 dist = edge_dist.detach().cpu().reshape(-1).to(torch.float64)
             else:
                 edge_vec = getattr(batch, "edge_vec", None)
                 if isinstance(edge_vec, torch.Tensor):
-                    dist = torch.linalg.norm(edge_vec.detach().cpu().to(torch.float64), dim=-1)
+                    dist = torch.linalg.norm(
+                        edge_vec.detach().cpu().to(torch.float64), dim=-1
+                    )
                 else:
                     dist = None
             if dist is not None and dist.numel() == src.numel():
@@ -332,15 +344,23 @@ class LinearProbeEvaluator:
                     counts = torch.zeros((num_graphs,), dtype=torch.float64)
                     valid_graph = batch_index[finite]
                     sums.index_add_(0, valid_graph, node_min[finite])
-                    counts.index_add_(0, valid_graph, torch.ones_like(valid_graph, dtype=torch.float64))
+                    counts.index_add_(
+                        0,
+                        valid_graph,
+                        torch.ones_like(valid_graph, dtype=torch.float64),
+                    )
                     valid_counts = counts > 0
-                    mean_nn_t = torch.full((num_graphs,), float("nan"), dtype=torch.float64)
+                    mean_nn_t = torch.full(
+                        (num_graphs,), float("nan"), dtype=torch.float64
+                    )
                     mean_nn_t[valid_counts] = sums[valid_counts] / counts[valid_counts]
                     mean_nn = mean_nn_t.numpy()
         targets["mean_nn_distance"] = mean_nn
 
         # Energy-like labels if available.
-        energy_values = _tensor_to_graph_values(getattr(batch, "energy", None), num_graphs=num_graphs)
+        energy_values = _tensor_to_graph_values(
+            getattr(batch, "energy", None), num_graphs=num_graphs
+        )
         energy_per_atom_values = _tensor_to_graph_values(
             getattr(batch, "energy_per_atom", None), num_graphs=num_graphs
         )
@@ -363,10 +383,12 @@ class LinearProbeEvaluator:
         )
         targets["energy_per_atom"] = energy_per_atom
 
-        missing_f_pa = np.isnan(formation_energy_per_atom) & np.isfinite(formation_energy)
-        formation_energy_per_atom[missing_f_pa] = formation_energy[missing_f_pa] / np.clip(
-            n_atoms[missing_f_pa], a_min=1.0, a_max=None
+        missing_f_pa = np.isnan(formation_energy_per_atom) & np.isfinite(
+            formation_energy
         )
+        formation_energy_per_atom[missing_f_pa] = formation_energy[
+            missing_f_pa
+        ] / np.clip(n_atoms[missing_f_pa], a_min=1.0, a_max=None)
         targets["formation_energy_per_atom"] = formation_energy_per_atom
 
         # Classification labels.
@@ -384,9 +406,12 @@ class LinearProbeEvaluator:
             getattr(batch, "crystal_system", None), num_graphs=num_graphs
         )
         if all(v is None for v in crystal_system_values):
-            sg_values = _tensor_to_graph_values(getattr(batch, "space_group", None), num_graphs=num_graphs)
+            sg_values = _tensor_to_graph_values(
+                getattr(batch, "space_group", None), num_graphs=num_graphs
+            )
             crystal_system_values = [
-                _get_crystal_system(int(v)) if v is not None else None for v in sg_values
+                _get_crystal_system(int(v)) if v is not None else None
+                for v in sg_values
             ]
 
         targets["chemical_family"] = np.array(chemical_family, dtype=object)
@@ -422,9 +447,7 @@ class LinearProbeEvaluator:
             progress_callback(
                 "collect_start",
                 {
-                    "max_samples": (
-                        None if max_samples is None else int(max_samples)
-                    ),
+                    "max_samples": (None if max_samples is None else int(max_samples)),
                 },
             )
 
@@ -548,7 +571,10 @@ class LinearProbeEvaluator:
     ) -> dict[str, float] | None:
         values = np.asarray(y, dtype=object)
         valid = np.array(
-            [v is not None and not (isinstance(v, float) and np.isnan(v)) for v in values],
+            [
+                v is not None and not (isinstance(v, float) and np.isnan(v))
+                for v in values
+            ],
             dtype=bool,
         )
         if int(valid.sum()) < self.min_samples:
@@ -565,7 +591,9 @@ class LinearProbeEvaluator:
         rng = np.random.default_rng(self.random_seed)
         split = _stratified_split_indices(yy, test_size=self.test_size, rng=rng)
         if split is None:
-            split = _random_split_indices(xx.shape[0], test_size=self.test_size, rng=rng)
+            split = _random_split_indices(
+                xx.shape[0], test_size=self.test_size, rng=rng
+            )
         train_idx, test_idx = split
         if train_idx.size == 0 or test_idx.size == 0:
             return None

@@ -2,12 +2,21 @@
 
 defaults:
   - /dataset: bulk
-  - /model: orb/triforces
+  - /collate: orb
+  - /model@backbone: orb/triforces
   - /head@model.heads.proj: supervised/supervised_energy_conserving
   - /loss: supervised
+  - /normalization/references@_normalization_references: lematbulk_ls
+  - /normalization/transform_info@_normalization_transform_info: lematbulk_ls
+  - /loss_normalization@loss: lematbulk_ls
   - /trainer@train: default
   - /logger: wandb
   - _self_
+
+model:
+  _target_: triforces.models.adapter_model.AdapterModel
+  backbone: ${backbone}
+  heads: {}
 
 collate:
   contrastive: false
@@ -21,14 +30,22 @@ loss:
   energy_weight: 1.0
   forces_weight: 1.0
   stress_weight: 0.0
+  prediction_space: normalized
 
-model:
-  backbone:
-    interaction:
-      model_type: orb-v3-direct
-      disable_forces: true
-      disable_stress: true
-      compute_displacement: true
+train:
+  hooks:
+    supervised_eval:
+      enabled: true
+      every_n_steps: 1000
+      progress_bar: true
+
+backbone:
+  output_dim: 512
+  interaction:
+    model_type: orb-v3-direct
+    disable_forces: true
+    disable_stress: true
+    compute_displacement: true
 
 device: null
 

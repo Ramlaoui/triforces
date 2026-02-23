@@ -294,10 +294,12 @@ class TriForcesModel(nn.Module):
                 and batch_idx is not None
                 and cell_offsets_t.numel() > 0
             ):
-                cell_t = torch.as_tensor(cell, device=device, dtype=dtype).view(-1, 3, 3)
-                edge_batch = torch.as_tensor(batch_idx, device=device, dtype=torch.long)[
-                    src
-                ]
+                cell_t = torch.as_tensor(cell, device=device, dtype=dtype).view(
+                    -1, 3, 3
+                )
+                edge_batch = torch.as_tensor(
+                    batch_idx, device=device, dtype=torch.long
+                )[src]
                 edge_cell = cell_t[edge_batch]
                 offset_vec = torch.einsum(
                     "ei,eij->ej",
@@ -308,7 +310,9 @@ class TriForcesModel(nn.Module):
 
         edge_dist = _get_first_attr(batch, ("edge_dist", "edge_distance", "distances"))
         if edge_dist is None:
-            edge_dist = torch.as_tensor(edge_vec, device=device, dtype=dtype).norm(dim=-1)
+            edge_dist = torch.as_tensor(edge_vec, device=device, dtype=dtype).norm(
+                dim=-1
+            )
 
         return (
             torch.as_tensor(edge_index, device=device, dtype=torch.long),

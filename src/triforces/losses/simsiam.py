@@ -89,7 +89,9 @@ class SimSiamLoss(nn.Module):
             and "node_predictions" in preds
             and "node_projections" in preds
         ):
-            if not hasattr(data, "node_pair_idx1") or not hasattr(data, "node_pair_idx2"):
+            if not hasattr(data, "node_pair_idx1") or not hasattr(
+                data, "node_pair_idx2"
+            ):
                 raise ValueError(
                     "SimSiamLoss node loss requires `node_pair_idx1` and "
                     "`node_pair_idx2` from collate."

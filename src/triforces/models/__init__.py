@@ -2,8 +2,8 @@ from .adapter_model import AdapterModel
 from .heads import (
     BarlowTwinsProjectionHead,
     ClassificationHead,
-    DirectVectorHead,
     DirectSupervisedHead,
+    DirectVectorHead,
     EnergyConservingHead,
     EquivariantVectorHead,
     ProjectionHead,

@@ -11,4 +11,3 @@ class BackboneOutputs:
     node_feats: torch.Tensor
     graph_feats: torch.Tensor
     extras: dict[str, Any] = field(default_factory=dict)
-

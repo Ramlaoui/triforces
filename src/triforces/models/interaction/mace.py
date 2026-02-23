@@ -161,14 +161,18 @@ class MACE(Model):
             else:
                 num_graphs = getattr(batch, "num_graphs", None)
                 if num_graphs is None:
-                    num_graphs = int(batch_idx.max().item()) + 1 if batch_idx.numel() else 0
+                    num_graphs = (
+                        int(batch_idx.max().item()) + 1 if batch_idx.numel() else 0
+                    )
                 num_graphs = int(num_graphs)
                 graph_feats = node_feats.new_zeros((num_graphs, node_feats.size(-1)))
                 graph_feats.index_add_(0, batch_idx, node_feats)
                 counts = torch.bincount(batch_idx, minlength=num_graphs).clamp_min(1)
                 graph_feats = graph_feats / counts.to(graph_feats.dtype).unsqueeze(1)
 
-        extras = {k: v for k, v in out.items() if k not in {"node_feats", "graph_feats"}}
+        extras = {
+            k: v for k, v in out.items() if k not in {"node_feats", "graph_feats"}
+        }
         return BackboneOutputs(
             node_feats=node_feats,
             graph_feats=graph_feats,

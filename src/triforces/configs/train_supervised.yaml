@@ -1,11 +1,17 @@
 defaults:
   - dataset: bulk
-  - model: esen/triforces
+  - /collate: esen
+  - /model@backbone: esen/triforces
   - /head@model.heads.proj: supervised/supervised_direct
   - loss: supervised
   - trainer@train: default
   - logger: wandb
   - _self_
+
+model:
+  _target_: triforces.models.adapter_model.AdapterModel
+  backbone: ${backbone}
+  heads: {}
 
 collate:
   contrastive: false

@@ -16,7 +16,9 @@ from triforces.models.outputs import BackboneOutputs
 from triforces.models.triforces import TriForcesModel
 
 
-def _mean_pool(node_feats: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
+def _mean_pool(
+    node_feats: torch.Tensor, batch: torch.Tensor, num_graphs: int
+) -> torch.Tensor:
     out = node_feats.new_zeros((num_graphs, node_feats.size(-1)))
     out.index_add_(0, batch, node_feats)
     count = torch.bincount(batch, minlength=num_graphs).clamp_min(1).to(out.dtype)

@@ -14,9 +14,9 @@ def _unwrap_dataset_for_probe(dataset: object, *, use_base_dataset: bool) -> obj
         return dataset
     cls_name = dataset.__class__.__name__
     if (
-        (cls_name.endswith("ContrastiveDataset") or cls_name.endswith("AugmentationDataset"))
-        and hasattr(dataset, "dataset")
-    ):
+        cls_name.endswith("ContrastiveDataset")
+        or cls_name.endswith("AugmentationDataset")
+    ) and hasattr(dataset, "dataset"):
         return getattr(dataset, "dataset")
     return dataset
 

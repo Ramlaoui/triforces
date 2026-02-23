@@ -2,6 +2,11 @@ _target_: triforces.losses.SupervisedLoss
 energy_weight: 1.0
 forces_weight: 0.0
 stress_weight: 0.0
-energy_loss: mse
-forces_loss: mse
-stress_loss: mse
+energy_loss: huber
+forces_loss: huber
+stress_loss: huber
+energy_huber_delta: 1.0
+forces_huber_delta: 1.0
+stress_huber_delta: 1.0
+energy_per_atom: false
+prediction_space: normalized

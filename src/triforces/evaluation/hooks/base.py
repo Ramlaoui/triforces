@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import torch
 from typing import Protocol
+
+import torch
 
 
 class TrainHook(Protocol):

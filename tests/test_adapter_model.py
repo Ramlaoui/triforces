@@ -136,7 +136,9 @@ def test_adapter_model_infers_predictor_input_dim_from_projection_head():
 def test_adapter_model_uses_head_build_from_backbone_info():
     backbone = DummyBackbone()
     BuildFromInfoHead.called_with = None
-    model = AdapterModel(backbone=backbone, heads={"custom": partial(BuildFromInfoHead)})
+    model = AdapterModel(
+        backbone=backbone, heads={"custom": partial(BuildFromInfoHead)}
+    )
 
     z = torch.tensor([1, 2, 1, 3])
     pos = torch.zeros((4, 3))

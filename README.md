@@ -1,60 +1,70 @@
-# triforces
+# TriForces
 
-Utilities for contrastive / self-supervised learning on crystal graphs, including:
-
-- Crystal augmentations (noise, strain, vacancies, supercells, group substitution)
-- Contrastive datasets for multi-view sampling
-- Losses: InfoNCE-style contrastive, Barlow Twins, iBOT/DINO-style components
+Triforces extends atomistic models with self-supervised training for transferable representations.
 
 ## Install
 
 ```bash
-pip install -e .
+uv sync --extra orb
 ```
 
-## Minimal training example (CIF folder)
+## Basic commands
 
-Requires PyTorch + ASE (+ `spglib` for some augmentations):
+### 1) Pretrain (Orb)
 
 ```bash
-triforces data_path=/path/to/cifs dataset=cif epochs=10 batch_size=16
-# or a simplified TriForces backbone:
-triforces data_path=/path/to/cifs dataset=cif backbone=triforces_esen
+triforces train \
+  -cn experiments/pretraining/orb/main_triforces \
+  train.epochs=10 \
+  train.batch_size=16
 ```
 
-## Minimal training example (Atompack)
+### 2) Supervised from scratch (Orb)
 
 ```bash
-triforces data_path=/path/to/data.atp dataset=atompack
-# or a folder of .atp files:
-triforces data_path=/path/to/atp_folder dataset=atompack atompack_mmap=true
+triforces train \
+  -cn experiments/supervised/orb/energy_conserving \
+  train.epochs=10 \
+  train.batch_size=16
 ```
 
-Defaults live in `src/triforces/configs/train_contrastive.yaml`; override any field with
-Hydra-style `key=value` arguments.
+### 3) Supervised initialized from a pretrained backbone
 
-## Quick import
-
-```python
-from triforces.losses import ContrastiveLoss, BarlowTwinsLoss
-from triforces.augmentations import CrystalNoiseAugmentation
+```bash
+triforces train \
+  -cn experiments/supervised/orb/energy_conserving \
+  train.checkpoint.init_from=/absolute/path/to/pretrain/best.pt \
+  train.checkpoint.init_mode=backbone \
+  train.checkpoint.init_use_backbone_config=true \
+  train.checkpoint.init_strict=false
 ```
 
-## Adapting new backbones (no duplication)
+### 4) Resume an interrupted run
 
-Use the preset factory:
-
-```python
-from triforces.models import create_backbone
-
-built = create_backbone("triforces_esen", embed_dim=256)
-backbone = built.model
+```bash
+triforces train \
+  -cn experiments/pretraining/orb/main_triforces \
+  train.checkpoint.resume_from=/absolute/path/to/run/last.pt
 ```
 
-Or wrap any model to match the `node_features`/`graph_features` API:
+## Checkpoint UX
 
-```python
-from triforces.models import TriForcesAdapter
+Use these keys under `train.checkpoint`:
 
-backbone = TriForcesAdapter(your_model, node_key="node_features", graph_key="graph_features")
-```
+- `enabled`: turn checkpointing on/off.
+- `save_last_every_steps`: frequency for updating `last.pt`.
+- `save_every_epochs`: frequency for `epoch_XXXX.pt`.
+- `save_best`: save `best.pt` from monitored metric.
+- `monitor`: metric key to monitor (default: `loss`).
+- `mode`: `min` or `max`.
+- `init_from`: load weights before training (`full` or `backbone`).
+- `init_use_backbone_config`: when `true` with `init_mode=backbone`, instantiate using
+  the backbone config stored in checkpoint metadata.
+- `resume_from`: continue optimizer/model/loss states from a previous run.
+- `allow_data_pipeline_override`: if `false` (default), `resume_from` requires dataset+collate
+  config to match checkpoint metadata.
+
+Notes:
+
+- `resume_from` and `init_from` are mutually exclusive.
+- `resume_from` expects a new-format checkpoint containing `config_resolved`.

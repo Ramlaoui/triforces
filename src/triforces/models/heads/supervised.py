@@ -7,10 +7,11 @@ from typing import Any, Dict
 import torch
 import torch.nn as nn
 
-from .barlow_twins import maybe_import_e3nn
 from triforces.models.mlp import create_mlp
 from triforces.models.outputs import BackboneOutputs
 from triforces.utils.stress import stress_to_voigt_6
+
+from .barlow_twins import maybe_import_e3nn
 
 
 def _mean_pool(
@@ -261,7 +262,12 @@ class EnergyConservingHead(nn.Module):
         num_graphs = int(getattr(batch, "num_graphs", int(batch_idx.max().item()) + 1))
         virial = pos.new_zeros((num_graphs, 3, 3))
         virial.index_add_(0, batch_idx, torch.einsum("ni,nj->nij", pos, forces))
-        volume = torch.abs(torch.linalg.det(cell)).clamp_min(1e-8).unsqueeze(-1).unsqueeze(-1)
+        volume = (
+            torch.abs(torch.linalg.det(cell))
+            .clamp_min(1e-8)
+            .unsqueeze(-1)
+            .unsqueeze(-1)
+        )
         return -virial / volume
 
     def forward(
@@ -420,8 +426,7 @@ class EquivariantVectorHead(nn.Module):
         if d % 3 == 0:
             return 0, d // 3
         raise ValueError(
-            "Could not infer equivariant layout. Expected dim = S + 3*V, "
-            f"got {d}."
+            f"Could not infer equivariant layout. Expected dim = S + 3*V, got {d}."
         )
 
     def _get_gate(

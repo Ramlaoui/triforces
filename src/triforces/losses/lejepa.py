@@ -485,7 +485,9 @@ class LeJEPALoss(BaseLoss):
                 if not node_projections:
                     raise ValueError("No node embeddings found in preds.")
 
-                node_idx_cache: dict[torch.device, tuple[torch.Tensor, torch.Tensor]] = {}
+                node_idx_cache: dict[
+                    torch.device, tuple[torch.Tensor, torch.Tensor]
+                ] = {}
                 for key_name, node_proj in node_projections:
                     device = node_proj.device
                     if device not in node_idx_cache:

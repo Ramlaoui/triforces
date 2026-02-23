@@ -17,9 +17,7 @@ def test_extract_batch_stats_from_pyg_batch() -> None:
     g2 = Data(
         z=torch.tensor([8, 1, 1], dtype=torch.long),
         pos=torch.randn(3, 3),
-        edge_index=torch.tensor(
-            [[0, 1, 1, 2], [1, 0, 2, 1]], dtype=torch.long
-        ),
+        edge_index=torch.tensor([[0, 1, 1, 2], [1, 0, 2, 1]], dtype=torch.long),
     )
     batch = Batch.from_data_list([g1, g2])
 

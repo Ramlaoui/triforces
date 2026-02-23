@@ -1,20 +1,20 @@
+import logging
 import os
 from typing import Any, Callable, Optional, Type, Union
 
-import logging
 import hydra
 import numpy as np
 import torch
 import torch.nn as nn
 from ase import Atoms
 from fairchem.core.datasets.atomic_data import AtomicData
-from fairchem.core.models.base import GraphModelMixin
 from fairchem.core.graph.compute import generate_graph
+from fairchem.core.models.base import GraphModelMixin
 from huggingface_hub import hf_hub_download
 from torch_geometric.data import Batch, Data
+from triforces.models.chemistry import stress_to_voigt_6, voigt_6_to_stress
 
 from triforces.models.base import Model
-from triforces.models.chemistry import stress_to_voigt_6, voigt_6_to_stress
 from triforces.models.model_outputs import ModelOutputs
 from triforces.models.normalization import NormalizationState, NormalizationType
 
@@ -514,9 +514,6 @@ class eSEN(Model):
             default_repo_id = "facebook/OMol25"
             model_name = f"checkpoints/{model_name}"
 
-        if "direct" in model_name:
-            direct_forces = True
-
         model_path = None
         try:
             hf_model_repo_id = os.environ.get("HF_MODEL_REPO_ID", default_repo_id)
@@ -533,10 +530,6 @@ class eSEN(Model):
         # Convert torch.device to string if needed
         if isinstance(device, torch.device):
             device = str(device)
-
-        cpu = False
-        if "cpu" in device:
-            cpu = True
 
         from fairchem.core import FAIRChemCalculator
         from fairchem.core.units.mlip_unit import load_predict_unit

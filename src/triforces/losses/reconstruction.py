@@ -133,9 +133,9 @@ class ReconstructionLoss(BaseLoss):
 
         with torch.no_grad():
             metrics["noise_rmse"] = per_node.mean().sqrt().item()
-            metrics["noise_cosine_similarity"] = F.cosine_similarity(
-                noise_pred, target, dim=-1, eps=1e-8
-            ).mean().item()
+            metrics["noise_cosine_similarity"] = (
+                F.cosine_similarity(noise_pred, target, dim=-1, eps=1e-8).mean().item()
+            )
 
         metrics["loss/noise"] = noise_loss.item()
         return noise_loss, metrics
@@ -190,7 +190,9 @@ class ReconstructionLoss(BaseLoss):
                 mask = z.to(device=logits.device, dtype=torch.long) == self.mask_token
 
         if mask is None:
-            mask = torch.zeros((target.numel(),), device=logits.device, dtype=torch.bool)
+            mask = torch.zeros(
+                (target.numel(),), device=logits.device, dtype=torch.bool
+            )
 
         valid = (target >= 0) & (target < logits.size(-1))
         mask = mask & valid
@@ -245,7 +247,9 @@ class ReconstructionLoss(BaseLoss):
             metrics["loss/noise"] = 0.0
 
         if self.atom_type_weight > 0:
-            atom_type_loss, atom_type_metrics = self._compute_atom_type_loss(data, preds)
+            atom_type_loss, atom_type_metrics = self._compute_atom_type_loss(
+                data, preds
+            )
             total_loss = total_loss + self.atom_type_weight * atom_type_loss
             metrics.update(atom_type_metrics)
         else:

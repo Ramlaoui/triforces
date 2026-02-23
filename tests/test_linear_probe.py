@@ -19,7 +19,9 @@ class _ToyGraphDataset(Dataset[Data]):
                 z = torch.tensor([14] * n_atoms, dtype=torch.long)  # intermetallic-like
                 space_group = torch.tensor(225, dtype=torch.long)  # cubic
             else:
-                z = torch.tensor(([11, 17] * ((n_atoms + 1) // 2))[:n_atoms], dtype=torch.long)
+                z = torch.tensor(
+                    ([11, 17] * ((n_atoms + 1) // 2))[:n_atoms], dtype=torch.long
+                )
                 space_group = torch.tensor(62, dtype=torch.long)  # orthorhombic
 
             pos = torch.zeros((n_atoms, 3), dtype=torch.float32)
@@ -195,7 +197,10 @@ def test_train_run_with_linear_probe_enabled() -> None:
     cfg = OmegaConf.create(
         {
             "device": "cpu",
-            "dataset": {"_target_": "tests.test_linear_probe._ToyGraphDataset", "n": 24},
+            "dataset": {
+                "_target_": "tests.test_linear_probe._ToyGraphDataset",
+                "n": 24,
+            },
             "collate": {
                 "_target_": "triforces.data.pyg_supervised_collate",
                 "_partial_": True,
@@ -243,7 +248,10 @@ def test_train_run_with_linear_probe_every_n_steps(monkeypatch) -> None:
     cfg = OmegaConf.create(
         {
             "device": "cpu",
-            "dataset": {"_target_": "tests.test_linear_probe._ToyGraphDataset", "n": 24},
+            "dataset": {
+                "_target_": "tests.test_linear_probe._ToyGraphDataset",
+                "n": 24,
+            },
             "collate": {
                 "_target_": "triforces.data.pyg_supervised_collate",
                 "_partial_": True,

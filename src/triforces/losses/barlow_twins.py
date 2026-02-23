@@ -127,7 +127,9 @@ class BarlowTwinsLoss(nn.Module):
             kwargs["graph_embeddings2"] = graph_projections[idx2]
 
         if self.lambda_node > 0 and node_projections is not None:
-            if not hasattr(data, "node_pair_idx1") or not hasattr(data, "node_pair_idx2"):
+            if not hasattr(data, "node_pair_idx1") or not hasattr(
+                data, "node_pair_idx2"
+            ):
                 raise ValueError(
                     "BarlowTwinsLoss node loss requires `node_pair_idx1` and "
                     "`node_pair_idx2` from collate."

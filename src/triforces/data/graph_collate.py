@@ -70,9 +70,7 @@ def _extract_noise(
     return _as_tensor(noise, dtype=torch.float32), _as_tensor(mask, dtype=torch.bool)
 
 
-def _extract_forces(
-    atoms: Atoms, n: int, has_forces_any: bool
-) -> torch.Tensor | None:
+def _extract_forces(atoms: Atoms, n: int, has_forces_any: bool) -> torch.Tensor | None:
     if not has_forces_any:
         return None
     if _has_array(atoms, "forces"):
@@ -96,9 +94,7 @@ def _extract_original_numbers(
     return _as_tensor(original_numbers, dtype=torch.long)
 
 
-def _extract_atom_mask(
-    atoms: Atoms, n: int, has_mask_any: bool
-) -> torch.Tensor | None:
+def _extract_atom_mask(atoms: Atoms, n: int, has_mask_any: bool) -> torch.Tensor | None:
     if not has_mask_any:
         return None
     if _has_array(atoms, "atom_mask"):

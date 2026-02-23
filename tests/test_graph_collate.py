@@ -113,10 +113,14 @@ def test_graph_collate_propagates_masking_arrays():
     batch = graph_supervised_collate(samples, transform=DummyTransform())
     assert hasattr(batch, "original_numbers")
     assert batch.original_numbers.dtype == torch.long
-    assert torch.equal(batch.original_numbers, torch.tensor([6, 8, 14], dtype=torch.long))
+    assert torch.equal(
+        batch.original_numbers, torch.tensor([6, 8, 14], dtype=torch.long)
+    )
     assert hasattr(batch, "atom_mask")
     assert batch.atom_mask.dtype == torch.bool
-    assert torch.equal(batch.atom_mask, torch.tensor([True, False, True], dtype=torch.bool))
+    assert torch.equal(
+        batch.atom_mask, torch.tensor([True, False, True], dtype=torch.bool)
+    )
 
 
 def test_pyg_collate_can_disable_contrastive_mode():

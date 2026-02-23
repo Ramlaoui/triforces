@@ -19,17 +19,13 @@ model:
   heads: {}
 
 train:
+  run_name: esen_pretrain_${now:%Y%m%d_%H%M%S}
   lr: 3e-4
 
 backbone:
   output_dim: 512
 
 dataset:
-  return_pairs: true
-  n_augmentation_views: 2
-  n_opposite_views: 0
-  include_original: false
-  apply_augmentations_prob: 1.0
   augmentation_probabilities:
     noise: 1.0
     rotate: 1.0
@@ -54,16 +50,6 @@ loss:
   base_weight: 0.1
 
 device: null
-
-logger:
-  enabled: true
-  project: triforces
-  entity: null
-  name: null
-  group: null
-  tags: []
-  job_type: null
-  mode: null
 
 hydra:
   job:

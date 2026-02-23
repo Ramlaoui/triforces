@@ -11,10 +11,11 @@ def _print_help(*, file: TextIO) -> None:
         "Usage: triforces <command> [args...]\n"
         "\n"
         "Commands:\n"
-        "  train   Run contrastive pre-training (Hydra config overrides).\n"
+        "  train   Run training from any Hydra config (pretraining or supervised).\n"
         "\n"
         "Examples:\n"
-        "  triforces train -cn train_contrastive_orb train.epochs=10 train.batch_size=16\n",
+        "  triforces train -cn experiments/pretraining/orb/main_triforces train.epochs=10\n"
+        "  triforces train -cn experiments/supervised/orb/energy_conserving train.epochs=10\n",
         file=file,
     )
 

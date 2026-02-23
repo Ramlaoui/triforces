@@ -2,12 +2,18 @@
 
 defaults:
   - /dataset: bulk
-  - /model: orb/triforces
+  - /collate: orb
+  - /model@backbone: orb/triforces
   - /head@model.heads.proj: supervised/supervised_direct
   - /loss: supervised
   - /trainer@train: default
   - /logger: wandb
   - _self_
+
+model:
+  _target_: triforces.models.adapter_model.AdapterModel
+  backbone: ${backbone}
+  heads: {}
 
 collate:
   contrastive: false
@@ -22,13 +28,20 @@ loss:
   forces_weight: 1.0
   stress_weight: 0.0
 
-model:
-  backbone:
-    interaction:
-      model_type: orb-v3-direct
-      disable_forces: true
-      disable_stress: true
-      compute_displacement: false
+train:
+  batch_size: 64
+  hooks:
+    supervised_eval:
+      enabled: true
+      every_n_steps: 1000
+      progress_bar: true
+
+backbone:
+  interaction:
+    model_type: orb-v3-direct
+    disable_forces: true
+    disable_stress: true
+    compute_displacement: false
 
 device: null
 
