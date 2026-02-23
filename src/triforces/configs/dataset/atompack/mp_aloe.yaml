@@ -1,7 +1,7 @@
 _target_: triforces.data.atompack_dataset.AtompackDataset
 path: null
-repo_id: null
-path_in_repo: null
+repo_id: LeMaterial/Atompack
+path_in_repo: mp_aloe
 revision: null
 repo_type: dataset
 token: null

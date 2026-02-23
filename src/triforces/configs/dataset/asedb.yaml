@@ -1,4 +1,4 @@
-_target_: triforces.data.atompack_dataset.AtompackDataset
+_target_: triforces.data.asedb_dataset.ASEDBDataset
 path: null
 repo_id: null
 path_in_repo: null
@@ -9,6 +9,6 @@ cache_dir: null
 local_dir: null
 local_files_only: false
 force_download: false
-use_mmap: false
 add_targets: []
 extract_keys: []
+keep_db_open: true

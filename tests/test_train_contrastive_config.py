@@ -58,6 +58,37 @@ def test_validate_config_allows_lemat_bulk_without_data_path():
     validate_config(cfg)
 
 
+def test_validate_config_allows_asedb_with_path():
+    cfg = make_cfg(
+        dataset={
+            "_target_": "triforces.data.asedb_dataset.ASEDBDataset",
+            "path": "/tmp/data/train.db",
+        }
+    )
+    validate_config(cfg)
+
+
+def test_validate_config_allows_asedb_with_repo_id_only():
+    cfg = make_cfg(
+        dataset={
+            "_target_": "triforces.data.asedb_dataset.ASEDBDataset",
+            "repo_id": "Org/repo",
+        }
+    )
+    validate_config(cfg)
+
+
+def test_validate_config_rejects_asedb_without_path_or_repo_id():
+    cfg = make_cfg(
+        dataset={
+            "_target_": "triforces.data.asedb_dataset.ASEDBDataset",
+        }
+    )
+    with pytest.raises(ValueError) as excinfo:
+        validate_config(cfg)
+    assert "dataset.path or dataset.repo_id" in str(excinfo.value)
+
+
 def test_validate_config_requires_explicit_dataset_node():
     cfg = OmegaConf.create(
         {

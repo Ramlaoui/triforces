@@ -6,23 +6,18 @@ from typing import Any, Dict, List, Sequence, Union
 import numpy as np
 import torch
 from ase import Atoms
+from ase.db import connect
 from torch.utils.data import Dataset
+
+from triforces.utils.stress import stress_array_to_voigt_6
 
 from .ase_contrastive import AtomsSample
 
-try:
-    import atompack  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover
-    atompack = None
-
-
-def _require_atompack() -> Any:
-    if atompack is None:
-        raise ModuleNotFoundError(
-            "atompack is not installed. Install it before using AtompackDataset.\n"
-            "Install the `atompack` Python package in your environment."
-        )
-    return atompack
+_SUPPORTED_SUFFIXES = (".db", ".aselmdb")
+_DB_OPEN_KWARGS = {
+    ".db": {},
+    ".aselmdb": {"readonly": True, "use_lock_file": False},
+}
 
 
 def _require_hf_hub() -> Any:
@@ -30,13 +25,13 @@ def _require_hf_hub() -> Any:
         import huggingface_hub  # type: ignore
     except ModuleNotFoundError as exc:  # pragma: no cover
         raise ModuleNotFoundError(
-            "huggingface_hub is required for AtomPack Hugging Face integration.\n"
+            "huggingface_hub is required for ASE DB Hugging Face integration.\n"
             "Install with: uv pip install huggingface_hub"
         ) from exc
     return huggingface_hub
 
 
-def _resolve_atompack_path_from_hf(
+def _resolve_asedb_path_from_hf(
     *,
     repo_id: str,
     path_in_repo: str | None = None,
@@ -66,31 +61,33 @@ def _resolve_atompack_path_from_hf(
         "force_download": force_download,
     }
 
-    if normalized and normalized.endswith(".atp"):
+    if normalized and normalized.endswith(_SUPPORTED_SUFFIXES):
         return Path(hf.hf_hub_download(filename=normalized, **common_kwargs))
 
     allow_patterns = (
-        [f"{normalized}/*.atp", f"{normalized}/**/*.atp"]
+        [
+            f"{normalized}/*.db",
+            f"{normalized}/**/*.db",
+            f"{normalized}/*.aselmdb",
+            f"{normalized}/**/*.aselmdb",
+        ]
         if normalized
-        else ["*.atp", "**/*.atp"]
+        else ["*.db", "**/*.db", "*.aselmdb", "**/*.aselmdb"]
     )
     snapshot_root = Path(
         hf.snapshot_download(allow_patterns=allow_patterns, **common_kwargs)
     )
 
     if normalized is None:
-        atp_files = sorted(snapshot_root.glob("**/*.atp"))
-        if len(atp_files) == 0:
+        found = sorted(snapshot_root.glob("**/*.db")) + sorted(
+            snapshot_root.glob("**/*.aselmdb")
+        )
+        if not found:
             raise FileNotFoundError(
-                f"No .atp files found in Hugging Face repo '{repo_id}'. "
+                f"No ASE DB files found in Hugging Face repo '{repo_id}'. "
                 "Provide path_in_repo to the dataset folder/file."
             )
-        if len(atp_files) > 1:
-            raise ValueError(
-                "Multiple .atp files were found in the repo root snapshot. "
-                "Please set path_in_repo to a specific dataset folder or file."
-            )
-        return atp_files[0]
+        return snapshot_root
 
     resolved = snapshot_root / normalized
     if not resolved.exists():
@@ -100,25 +97,48 @@ def _resolve_atompack_path_from_hf(
     return resolved
 
 
-class AtompackDataset(Dataset[AtomsSample]):
-    """Atompack dataset wrapper that yields ASE ``Atoms``.
+class _ASEDBHandle:
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.db = connect(str(path), **_DB_OPEN_KWARGS.get(self.path.suffix, {}))
+
+    def __len__(self) -> int:
+        return len(self.db)
+
+    def get_row(self, local_idx: int):
+        row_iter = self.db.select(limit=1, offset=int(local_idx))
+        row = next(row_iter, None)
+        if row is None:
+            raise IndexError(
+                f"Local index {local_idx} out of bounds for database {self.path}"
+            )
+        return row
+
+    def close(self) -> None:
+        close_fn = getattr(self.db, "close", None)
+        if callable(close_fn):
+            close_fn()
+
+
+class ASEDBDataset(Dataset[AtomsSample]):
+    """ASE DB dataset wrapper that yields ASE ``Atoms``.
 
     Parameters
     ----------
     path : str or Path or Sequence[str | Path] or None
-        A single ``.atp`` file, a directory containing ``.atp`` files, or a list
-        of files/directories.
+        A single ``.db``/``.aselmdb`` file, a directory containing database files,
+        or a list of files/directories.
     repo_id : str, optional
         Hugging Face repo id. If set, dataset path is resolved from the Hub.
     path_in_repo : str, optional
         Relative file/folder path in the Hugging Face repo.
-    use_mmap : bool, default=False
-        Whether to open Atompack databases with memory mapping.
     add_targets : Sequence[str], optional
-        Targets to attach to output ASE atoms. Supported built-ins include
-        ``energy``, ``energy_per_atom``, ``forces``, and ``stress``.
+        Targets to attach to output ASE atoms (e.g. ``energy``, ``forces``,
+        ``stress``, ``energy_per_atom``).
     extract_keys : Sequence[str], optional
-        Additional molecule properties to copy into ASE atoms (or arrays).
+        Additional row data keys to attach to output ASE atoms.
+    keep_db_open : bool, default=True
+        Keep worker-local DB handles open for faster repeated access.
     """
 
     def __init__(
@@ -134,9 +154,9 @@ class AtompackDataset(Dataset[AtomsSample]):
         local_dir: str | Path | None = None,
         local_files_only: bool = False,
         force_download: bool = False,
-        use_mmap: bool = False,
         add_targets: Sequence[str] | None = None,
         extract_keys: Sequence[str] | None = None,
+        keep_db_open: bool = True,
     ):
         if path is not None and repo_id is not None:
             raise ValueError("Provide either `path` or `repo_id`, not both.")
@@ -144,7 +164,7 @@ class AtompackDataset(Dataset[AtomsSample]):
             raise ValueError("Either `path` or `repo_id` must be provided.")
 
         if repo_id is not None:
-            path = _resolve_atompack_path_from_hf(
+            path = _resolve_asedb_path_from_hf(
                 repo_id=repo_id,
                 path_in_repo=path_in_repo,
                 revision=revision,
@@ -156,31 +176,27 @@ class AtompackDataset(Dataset[AtomsSample]):
                 force_download=force_download,
             )
 
-        self.use_mmap = bool(use_mmap)
         self.add_targets = list(add_targets or [])
         self.extract_keys = list(extract_keys or [])
+        self.keep_db_open = bool(keep_db_open)
+
         self.paths: List[Path] = self._expand_paths(path)
         if not self.paths:
-            raise FileNotFoundError(f"No .atp files found for: {path}")
+            raise FileNotFoundError(f"No ASE DB files found for: {path}")
 
-        # Precompute per-file lengths (once in main process).
-        ap = _require_atompack()
-        open_fn = ap.Database.open_mmap if self.use_mmap else ap.Database.open
         self.file_lengths: List[int] = []
         for p in self.paths:
-            db = open_fn(str(p))
+            db = _ASEDBHandle(p)
             try:
                 self.file_lengths.append(int(len(db)))
             finally:
-                close_fn = getattr(db, "close", None)
-                if callable(close_fn):
-                    close_fn()
+                db.close()
 
         self._cum = np.cumsum([0] + self.file_lengths).tolist()
 
         # Worker-local connections.
         self._worker_id: int | None = None
-        self._dbs: Dict[Path, object] = {}
+        self._dbs: Dict[Path, _ASEDBHandle] = {}
 
     def _expand_paths(
         self, path: Union[str, Path, Sequence[Union[str, Path]], None]
@@ -197,19 +213,21 @@ class AtompackDataset(Dataset[AtomsSample]):
         for p in path_list:
             pp = Path(p)
             if pp.is_dir():
-                out.extend(sorted(pp.glob("**/*.atp")))
+                for suffix in _SUPPORTED_SUFFIXES:
+                    out.extend(sorted(pp.glob(f"**/*{suffix}")))
             else:
                 out.append(pp)
 
-        # Filter to existing .atp files
-        out = [p for p in out if p.exists() and p.suffix == ".atp"]
-        return out
+        return [
+            p
+            for p in out
+            if p.exists() and p.suffix in _SUPPORTED_SUFFIXES and p.is_file()
+        ]
 
     def __len__(self) -> int:
         return int(self._cum[-1])
 
-    def _get_worker_dbs(self) -> Dict[Path, object]:
-        ap = _require_atompack()
+    def _get_worker_dbs(self) -> Dict[Path, _ASEDBHandle]:
         worker_info = torch.utils.data.get_worker_info()
         wid = worker_info.id if worker_info is not None else None
 
@@ -220,9 +238,8 @@ class AtompackDataset(Dataset[AtomsSample]):
         self._dbs.clear()
         self._worker_id = wid
 
-        open_fn = ap.Database.open_mmap if self.use_mmap else ap.Database.open
         for p in self.paths:
-            self._dbs[p] = open_fn(str(p))
+            self._dbs[p] = _ASEDBHandle(p)
 
         return self._dbs
 
@@ -252,11 +269,11 @@ class AtompackDataset(Dataset[AtomsSample]):
         local_dir: str | Path | None = None,
         local_files_only: bool = False,
         force_download: bool = False,
-        use_mmap: bool = True,
         add_targets: Sequence[str] | None = None,
         extract_keys: Sequence[str] | None = None,
-    ) -> "AtompackDataset":
-        local_path = _resolve_atompack_path_from_hf(
+        keep_db_open: bool = True,
+    ) -> "ASEDBDataset":
+        local_path = _resolve_asedb_path_from_hf(
             repo_id=repo_id,
             path_in_repo=path_in_repo,
             revision=revision,
@@ -269,113 +286,138 @@ class AtompackDataset(Dataset[AtomsSample]):
         )
         return cls(
             path=local_path,
-            use_mmap=use_mmap,
             add_targets=add_targets,
             extract_keys=extract_keys,
+            keep_db_open=keep_db_open,
         )
 
     @staticmethod
-    def _has_property(molecule: Any, key: str) -> bool:
-        return hasattr(molecule, "has_property") and molecule.has_property(key)
+    def _row_data(row: Any) -> dict[str, Any]:
+        data = getattr(row, "data", None)
+        if isinstance(data, dict):
+            return data
+        return {}
 
     @classmethod
-    def _get_target_value(cls, molecule: Any, target: str) -> Any:
+    def _row_get_value(cls, row: Any, key: str) -> Any:
+        data = cls._row_data(row)
+        if key in data:
+            return data[key]
+        if hasattr(row, "get"):
+            value = row.get(key, None)
+            if value is not None:
+                return value
+        return getattr(row, key, None)
+
+    @classmethod
+    def _get_target_value(cls, atoms: Atoms, row: Any, target: str) -> Any:
         if target == "energy":
-            energy = getattr(molecule, "energy", None)
-            if energy is not None:
-                return energy
+            try:
+                return float(atoms.get_potential_energy())
+            except Exception:
+                return cls._row_get_value(row, "energy")
+
         if target == "forces":
-            forces = getattr(molecule, "forces", None)
-            if forces is not None:
-                return forces
+            try:
+                return np.asarray(atoms.get_forces(), dtype=np.float32)
+            except Exception:
+                return cls._row_get_value(row, "forces")
+
         if target == "stress":
-            stress = getattr(molecule, "stress", None)
-            if stress is not None:
-                return stress
-        return (
-            molecule.get_property(target) if cls._has_property(molecule, target) else None
-        )
+            try:
+                return np.asarray(atoms.get_stress(voigt=True), dtype=np.float32)
+            except Exception:
+                return cls._row_get_value(row, "stress")
 
-    def _molecule_to_ase(self, molecule: Any) -> Atoms:
-        info: dict[str, Any] = {}
-        for key in ("charge", "spin"):
-            if self._has_property(molecule, key):
-                info[key] = molecule.get_property(key)
-
-        atoms = Atoms(
-            numbers=np.asarray(molecule.atomic_numbers),
-            positions=np.asarray(molecule.positions),
-            info=info or None,
-        )
-
-        cell = getattr(molecule, "cell", None)
-        if cell is None:
-            atoms.set_pbc(False)
-        else:
-            atoms.set_cell(np.asarray(cell))
-            if self._has_property(molecule, "pbc"):
-                pbc = molecule.get_property("pbc")
-            else:
-                pbc = getattr(molecule, "pbc", True)
-            atoms.set_pbc(True if pbc is None else pbc)
-
-        for key in self.extract_keys:
-            value = self._get_target_value(molecule, key)
-            if value is None:
-                raise KeyError(f"Key '{key}' not found in molecule properties")
-            self._attach_target(atoms, key, value)
-
-        for target in self.add_targets:
-            if target == "energy_per_atom":
-                energy = self._get_target_value(molecule, "energy")
-                if energy is None:
-                    raise ValueError(
-                        "Target 'energy_per_atom' was requested but 'energy' was not found in atompack molecule"
-                    )
-                atoms.info["energy_per_atom"] = float(energy) / max(len(atoms), 1)
-                continue
-
-            value = self._get_target_value(molecule, target)
-            if value is None:
-                raise ValueError(
-                    f"Target '{target}' was requested but not found in atompack molecule"
-                )
-            self._attach_target(atoms, target, value)
-
-        return atoms
+        return cls._row_get_value(row, target)
 
     @staticmethod
-    def _attach_target(atoms: Atoms, key: str, value: Any) -> None:
+    def _attach_value(atoms: Atoms, key: str, value: Any) -> None:
         if key == "forces":
             atoms.arrays["forces"] = np.asarray(value, dtype=np.float32)
             return
-        if key in {"energy", "charge", "spin"}:
-            atoms.info[key] = float(value)
+        if key == "stress":
+            stress = np.asarray(value, dtype=np.float32)
+            if stress.shape == (3, 3):
+                atoms.info["stress_tensor"] = stress
+                stress = stress_array_to_voigt_6(stress)
+            atoms.info["stress"] = stress.astype(np.float32, copy=False)
             return
 
         array_value = np.asarray(value)
         if array_value.ndim == 0:
             atoms.info[key] = array_value.item()
             return
-        atoms.info[key] = array_value.astype(np.float32, copy=False)
+
+        # Keep atom-wise arrays in atoms.arrays for downstream transforms/collate.
+        if array_value.shape[0] == len(atoms):
+            atoms.arrays[key] = array_value
+            return
+        atoms.info[key] = array_value
+
+    def _row_to_atoms(self, row: Any) -> Atoms:
+        atoms = row.toatoms()
+
+        for key in self.extract_keys:
+            value = self._row_get_value(row, key)
+            if value is None:
+                raise KeyError(f"Key '{key}' not found in ASE DB row data")
+            self._attach_value(atoms, key, value)
+
+        for target in self.add_targets:
+            if target == "energy_per_atom":
+                energy = self._get_target_value(atoms, row, "energy")
+                if energy is None:
+                    raise ValueError(
+                        "Target 'energy_per_atom' was requested but 'energy' was not found in ASE DB row"
+                    )
+                atoms.info["energy_per_atom"] = float(energy) / max(len(atoms), 1)
+                continue
+
+            value = self._get_target_value(atoms, row, target)
+            if value is None:
+                raise ValueError(
+                    f"Target '{target}' was requested but not found in ASE DB row"
+                )
+            self._attach_value(atoms, target, value)
+
+        return atoms
 
     def __getitem__(self, idx: int) -> AtomsSample:
         file_i, local = self._locate(int(idx))
         p = self.paths[file_i]
-        dbs = self._get_worker_dbs()
-        mol = dbs[p][local]
-        atoms = self._molecule_to_ase(mol)
+
+        if self.keep_db_open:
+            dbs = self._get_worker_dbs()
+            row = dbs[p].get_row(local)
+        else:
+            db = _ASEDBHandle(p)
+            try:
+                row = db.get_row(local)
+            finally:
+                db.close()
+
+        atoms = self._row_to_atoms(row)
         return AtomsSample(atoms=atoms, pair_id=int(idx))
+
+    def get_node_counts(self) -> np.ndarray:
+        counts: list[int] = []
+        for path in self.paths:
+            db = _ASEDBHandle(path)
+            try:
+                for row in db.db.select():
+                    natoms = getattr(row, "natoms", None)
+                    counts.append(int(natoms) if natoms is not None else len(row.toatoms()))
+            finally:
+                db.close()
+        return np.asarray(counts, dtype=np.int64)
 
     def close(self) -> None:
         dbs = getattr(self, "_dbs", None)
         if not isinstance(dbs, dict):
             return
-
         for db in dbs.values():
-            close_fn = getattr(db, "close", None)
-            if callable(close_fn):
-                close_fn()
+            db.close()
         dbs.clear()
 
     def __del__(self) -> None:  # pragma: no cover

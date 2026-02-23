@@ -5,7 +5,7 @@ from omegaconf import DictConfig
 
 from triforces.train import run
 
-ALLOWED_DATASETS = ("cif", "atompack", "bulk", "lemat_bulk")
+ALLOWED_DATASETS = ("cif", "atompack", "asedb", "bulk", "lemat_bulk")
 
 __all__ = ["ALLOWED_DATASETS", "validate_config", "main"]
 
@@ -33,6 +33,8 @@ def _dataset_name_from_cfg(cfg: DictConfig) -> str | None:
             return "cif"
         if target.endswith("AtompackDataset"):
             return "atompack"
+        if target.endswith("ASEDBDataset"):
+            return "asedb"
         if target.endswith("LeMatBulkDataset"):
             return "lemat_bulk"
 
@@ -56,9 +58,15 @@ def _has_dataset_path(cfg: DictConfig, dataset_name: str) -> bool:
     if dataset_name == "cif":
         root = dataset_cfg.get("root") if isinstance(dataset_cfg, DictConfig) else None
         return bool(root)
-    if dataset_name == "atompack":
-        path = dataset_cfg.get("path") if isinstance(dataset_cfg, DictConfig) else None
-        return bool(path)
+    if dataset_name in {"atompack", "asedb"}:
+        if not isinstance(dataset_cfg, DictConfig):
+            return False
+        path = dataset_cfg.get("path")
+        if dataset_name == "atompack":
+            repo_id = dataset_cfg.get("repo_id")
+            return bool(path) or bool(repo_id)
+        repo_id = dataset_cfg.get("repo_id")
+        return bool(path) or bool(repo_id)
     return True
 
 
@@ -77,7 +85,13 @@ def validate_config(cfg: DictConfig) -> None:
         raise ValueError("Missing required config key: model")
 
     if not _has_dataset_path(cfg, dataset_name):
-        required = "dataset.root" if dataset_name == "cif" else "dataset.path"
+        required = "dataset.root"
+        if dataset_name == "atompack":
+            required = "dataset.path or dataset.repo_id"
+        elif dataset_name == "asedb":
+            required = "dataset.path or dataset.repo_id"
+        elif dataset_name != "cif":
+            required = "dataset.path"
         raise ValueError(
             f"Missing required config key: {required} "
             f"(required for dataset={dataset_name!r})"
