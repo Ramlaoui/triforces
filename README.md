@@ -2,6 +2,8 @@
 
 Triforces extends atomistic models with self-supervised training for transferable representations.
 
+Paper: [TriForces: Augmenting Atomistic GNNs for Transferable Representations](https://arxiv.org/abs/2605.20581)
+
 ## Install
 
 ```bash
@@ -119,3 +121,23 @@ model:
 `collate` constructs graph inputs from raw structures. You can replace/customize
 its target/config so your backbone receives the exact fields it needs
 (`edge_index`, neighbor lists, edge features, etc.).
+
+## Citation
+
+If you use this repository, please cite our paper: [TriForces: Augmenting Atomistic GNNs for Transferable Representations](https://arxiv.org/abs/2605.20581).
+
+BibTeX:
+
+```bibtex
+@article{ramlaoui2026triforces,
+  title   = {TriForces: Augmenting Atomistic GNNs for Transferable Representations},
+  author  = {Ramlaoui, Ali and Duval, Alexandre and Bull, Hannah and Schmidt, Victor and Talbot, Hugues and Malliaros, Fragkiskos D. and Musielewicz, Joseph},
+  journal = {arXiv preprint arXiv:2605.20581},
+  year    = {2026},
+  url     = {https://arxiv.org/abs/2605.20581}
+}
+```
+
+Example citation:
+
+> Ramlaoui, A., Duval, A., Bull, H., Schmidt, V., Talbot, H., Malliaros, F. D., & Musielewicz, J. (2026). *TriForces: Augmenting Atomistic GNNs for Transferable Representations*. arXiv preprint arXiv:2605.20581.
