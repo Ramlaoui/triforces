@@ -1,13 +1,17 @@
 # TriForces
 
-Triforces extends atomistic models with self-supervised training for transferable representations.
+<p align="center">
+  <img src="docs/assets/triforces-figure2.png" alt="TriForces self-supervised pretraining and encoder components" width="100%">
+</p>
 
-Paper: [TriForces: Augmenting Atomistic GNNs for Transferable Representations](https://arxiv.org/abs/2605.20581)
+TriForces extends atomistic models with self-supervised training for transferable representations.
+
+Paper: [TriForces: Augmenting Atomistic GNNs for Transferable Representations](https://arxiv.org/abs/2605.20581) (accepted at ICML 2026)
 
 ## Install
 
 ```bash
-uv sync --extra orb
+uv sync --extra orb # or fairchem2 or mace
 ```
 
 ## Basic commands
@@ -129,15 +133,18 @@ If you use this repository, please cite our paper: [TriForces: Augmenting Atomis
 BibTeX:
 
 ```bibtex
-@article{ramlaoui2026triforces,
-  title   = {TriForces: Augmenting Atomistic GNNs for Transferable Representations},
-  author  = {Ramlaoui, Ali and Duval, Alexandre and Bull, Hannah and Schmidt, Victor and Talbot, Hugues and Malliaros, Fragkiskos D. and Musielewicz, Joseph},
-  journal = {arXiv preprint arXiv:2605.20581},
-  year    = {2026},
-  url     = {https://arxiv.org/abs/2605.20581}
+@inproceedings{ramlaoui2026triforces,
+  title = {TriForces: Augmenting Atomistic GNNs for Transferable Representations},
+  author = {Ramlaoui, Ali and Duval, Alexandre and Bull, Hannah and Schmidt, Victor and Talbot, Hugues and Malliaros, Fragkiskos D. and Musielewicz, Joseph},
+  booktitle = {Proceedings of the 43rd International Conference on Machine Learning},
+  year = {2026},
+  url = {https://arxiv.org/abs/2605.20581},
+  eprint = {2605.20581},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.LG},
 }
 ```
 
 Example citation:
 
-> Ramlaoui, A., Duval, A., Bull, H., Schmidt, V., Talbot, H., Malliaros, F. D., & Musielewicz, J. (2026). *TriForces: Augmenting Atomistic GNNs for Transferable Representations*. arXiv preprint arXiv:2605.20581.
+> Ramlaoui, A., Duval, A., Bull, H., Schmidt, V., Talbot, H., Malliaros, F. D., & Musielewicz, J. (2026). *TriForces: Augmenting Atomistic GNNs for Transferable Representations*. In *Proceedings of the 43rd International Conference on Machine Learning*.
